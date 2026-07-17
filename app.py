@@ -1,4 +1,5 @@
 
+import base64
 import hashlib
 import hmac
 import secrets
@@ -26,42 +27,89 @@ st.set_page_config(
 )
 
 
+BACKGROUND_PATH = (
+    Path(__file__).resolve().parent / "assets" / "fondo_avion.png"
+)
+
+
+def cargar_fondo_css():
+    """Devuelve la imagen del fondo como data URI sin modificar la aplicación."""
+    if not BACKGROUND_PATH.exists():
+        return ""
+    contenido = base64.b64encode(BACKGROUND_PATH.read_bytes()).decode("utf-8")
+    return f"data:image/png;base64,{contenido}"
+
+
 # ============================================================
 # IDENTIDAD VISUAL JET AIRWAYS ACADEMY
 # ============================================================
 
 def aplicar_estilo_corporativo():
-    st.markdown(
-        """
+    fondo_css = cargar_fondo_css()
+    estilos = """
         <style>
         :root {
-            --jet-navy: #061B42;
-            --jet-navy-2: #0A2759;
-            --jet-blue: #123D7A;
+            --jet-navy: #04152F;
+            --jet-navy-2: #08264D;
+            --jet-blue: #0E4A92;
+            --jet-blue-bright: #2A6EDB;
             --jet-red: #E30613;
             --jet-red-hover: #B9040E;
+            --jet-gold: #D8B46A;
             --jet-white: #FFFFFF;
-            --jet-soft: #DCE7F7;
+            --jet-muted: #AFC3DF;
+            --jet-panel: rgba(9, 35, 74, 0.88);
+            --jet-panel-soft: rgba(255, 255, 255, 0.07);
+        }
+
+        html, body, [class*="css"] {
+            font-family: "Inter", "Segoe UI", Arial, sans-serif;
         }
 
         .stApp {
             background:
-                radial-gradient(circle at 85% 15%, rgba(25, 72, 139, 0.34), transparent 30%),
-                linear-gradient(135deg, var(--jet-navy) 0%, #071D46 48%, #020D22 100%);
+                linear-gradient(
+                    rgba(2, 10, 24, 0.88),
+                    rgba(3, 19, 41, 0.91)
+                ),
+                url("__FONDO_AVION__") center center / cover fixed no-repeat;
             color: var(--jet-white);
         }
 
         [data-testid="stHeader"] {
-            background: rgba(6, 27, 66, 0.82);
+            background: rgba(3, 13, 31, 0.76);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        [data-testid="stToolbar"] {
+            right: 1rem;
         }
 
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #041432 0%, #082653 100%);
-            border-right: 1px solid rgba(255,255,255,0.12);
+            background:
+                linear-gradient(180deg, rgba(3, 13, 31, 0.98) 0%, rgba(5, 28, 61, 0.98) 100%);
+            border-right: 1px solid rgba(255,255,255,0.09);
+            box-shadow: 18px 0 45px rgba(0,0,0,0.22);
         }
 
         [data-testid="stSidebar"] * {
             color: var(--jet-white);
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label {
+            background: rgba(255,255,255,0.045);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 0.62rem 0.72rem;
+            margin-bottom: 0.38rem;
+            transition: all 0.18s ease;
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label:hover {
+            background: rgba(42,110,219,0.18);
+            border-color: rgba(91,145,228,0.42);
+            transform: translateX(2px);
         }
 
         h1, h2, h3, h4, h5, h6, p, label,
@@ -69,102 +117,308 @@ def aplicar_estilo_corporativo():
             color: var(--jet-white) !important;
         }
 
+        h1 {
+            letter-spacing: -0.035em;
+            font-weight: 850 !important;
+        }
+
+        h2, h3 {
+            letter-spacing: -0.02em;
+        }
+
+        .block-container {
+            max-width: 1450px;
+            padding-top: 1.55rem;
+            padding-bottom: 2.5rem;
+        }
+
         div[data-testid="stForm"] {
-            background: rgba(9, 36, 80, 0.90);
-            border: 1px solid rgba(255, 255, 255, 0.22);
-            border-radius: 18px;
-            padding: 1.5rem 1.6rem 1.1rem 1.6rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+            background:
+                linear-gradient(145deg, rgba(11, 42, 88, 0.94), rgba(5, 24, 52, 0.94));
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 22px;
+            padding: 1.55rem 1.65rem 1.25rem 1.65rem;
+            box-shadow:
+                0 28px 70px rgba(0, 0, 0, 0.34),
+                inset 0 1px 0 rgba(255,255,255,0.05);
         }
 
         div[data-testid="stTextInput"] input,
         div[data-testid="stNumberInput"] input,
+        div[data-testid="stDateInput"] input,
+        div[data-testid="stTimeInput"] input,
         div[data-baseweb="select"] > div,
-        div[data-testid="stDateInput"] input {
-            background: rgba(255, 255, 255, 0.96) !important;
+        div[data-testid="stFileUploader"] section,
+        div[data-testid="stCameraInput"] > div {
+            background: rgba(255, 255, 255, 0.97) !important;
             color: #071A3E !important;
-            border-radius: 10px !important;
+            border-radius: 12px !important;
+            border: 1px solid rgba(7,26,62,0.10) !important;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+        }
+
+        div[data-testid="stTextInput"] input:focus,
+        div[data-testid="stNumberInput"] input:focus,
+        div[data-testid="stDateInput"] input:focus {
+            border-color: #2A6EDB !important;
+            box-shadow: 0 0 0 3px rgba(42,110,219,0.14) !important;
         }
 
         div[data-testid="stTextInput"] input::placeholder {
-            color: #6B7280 !important;
+            color: #778399 !important;
         }
 
         .stButton > button,
         .stDownloadButton > button,
         div[data-testid="stFormSubmitButton"] button {
-            background: linear-gradient(90deg, #E30613 0%, #F32632 100%) !important;
+            background:
+                linear-gradient(90deg, #C90714 0%, #E30613 48%, #F03B45 100%) !important;
             color: white !important;
             border: none !important;
-            border-radius: 10px !important;
-            font-weight: 700 !important;
+            border-radius: 12px !important;
+            font-weight: 800 !important;
             min-height: 3rem;
-            box-shadow: 0 8px 20px rgba(227, 6, 19, 0.25);
+            letter-spacing: 0.01em;
+            box-shadow: 0 12px 30px rgba(227, 6, 19, 0.26);
+            transition: all 0.18s ease;
         }
 
         .stButton > button:hover,
         .stDownloadButton > button:hover,
         div[data-testid="stFormSubmitButton"] button:hover {
-            background: var(--jet-red-hover) !important;
-            transform: translateY(-1px);
+            background: linear-gradient(90deg, #A9040D 0%, #D10915 100%) !important;
+            transform: translateY(-2px);
+            box-shadow: 0 16px 34px rgba(227, 6, 19, 0.32);
         }
 
         div[data-testid="stMetric"] {
-            background: rgba(255, 255, 255, 0.09);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            border-radius: 14px;
-            padding: 1rem;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.10), rgba(255,255,255,0.045));
+            border: 1px solid rgba(255, 255, 255, 0.11);
+            border-radius: 18px;
+            padding: 1.05rem 1.1rem;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.18);
+            min-height: 112px;
         }
 
-        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] label {
+            color: #BFD0E8 !important;
+            font-size: 0.82rem !important;
+            font-weight: 700 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.055em;
+        }
+
         div[data-testid="stMetricValue"] {
             color: white !important;
+            font-weight: 850 !important;
+            letter-spacing: -0.025em;
         }
 
         div[data-testid="stDataFrame"] {
             background: white;
-            border-radius: 12px;
+            border-radius: 16px;
             overflow: hidden;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.20);
+            border: 1px solid rgba(255,255,255,0.12);
         }
 
         [data-testid="stExpander"] {
-            background: rgba(9, 36, 80, 0.78);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            border-radius: 12px;
+            background: linear-gradient(145deg, rgba(9, 36, 80, 0.86), rgba(5,24,52,0.86));
+            border: 1px solid rgba(255, 255, 255, 0.11);
+            border-radius: 15px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.14);
+        }
+
+        div[data-testid="stAlert"] {
+            border-radius: 14px;
         }
 
         .jet-brand-title {
             text-align: center;
             color: white;
-            font-size: 2rem;
-            font-weight: 800;
-            margin-top: 0.15rem;
-            margin-bottom: 0.15rem;
-            letter-spacing: 0.02em;
+            font-size: 2.25rem;
+            font-weight: 900;
+            margin-top: 0.2rem;
+            margin-bottom: 0.2rem;
+            letter-spacing: -0.035em;
         }
 
         .jet-brand-subtitle {
             text-align: center;
-            color: #DCE7F7;
+            color: #B9CBE4;
             font-size: 1rem;
-            margin-bottom: 1.4rem;
+            margin-bottom: 1.5rem;
         }
 
         .jet-footer {
             text-align: center;
-            color: rgba(255,255,255,0.58);
+            color: rgba(255,255,255,0.55);
             font-size: 0.78rem;
             margin-top: 2rem;
         }
 
-        .block-container {
-            padding-top: 2.2rem;
-            padding-bottom: 2rem;
+        .jet-hero {
+            position: relative;
+            overflow: hidden;
+            border-radius: 24px;
+            padding: 1.65rem 1.9rem;
+            margin-bottom: 1.4rem;
+            background:
+                linear-gradient(120deg, rgba(6,27,66,0.96) 0%, rgba(11,56,115,0.90) 62%, rgba(227,6,19,0.80) 140%);
+            border: 1px solid rgba(255,255,255,0.13);
+            box-shadow: 0 28px 70px rgba(0,0,0,0.31);
+        }
+
+        .jet-hero::after {
+            content: "✈";
+            position: absolute;
+            right: 2.4rem;
+            top: 0.35rem;
+            font-size: 7.8rem;
+            color: rgba(255,255,255,0.075);
+            transform: rotate(-8deg);
+        }
+
+        .jet-kicker {
+            color: #D6E3F6;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+            font-size: 0.72rem;
+            font-weight: 800;
+            margin-bottom: 0.5rem;
+        }
+
+        .jet-hero-title {
+            color: white;
+            font-size: 2rem;
+            font-weight: 900;
+            letter-spacing: -0.035em;
+            line-height: 1.05;
+            margin-bottom: 0.55rem;
+        }
+
+        .jet-hero-copy {
+            color: #C6D7EE;
+            font-size: 0.98rem;
+            max-width: 760px;
+            margin: 0;
+        }
+
+        .jet-badge {
+            display: inline-block;
+            margin-top: 0.95rem;
+            padding: 0.42rem 0.75rem;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.16);
+            color: #F3F7FD;
+            font-size: 0.78rem;
+            font-weight: 750;
+        }
+
+        .jet-section-title {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            margin: 0.2rem 0 1rem 0;
+            font-size: 1.2rem;
+            font-weight: 850;
+            color: white;
+        }
+
+        .jet-section-title::before {
+            content: "";
+            width: 4px;
+            height: 24px;
+            border-radius: 10px;
+            background: linear-gradient(180deg, #E30613, #FF6670);
+            box-shadow: 0 0 16px rgba(227,6,19,0.45);
+        }
+
+        .status-chip {
+            display: inline-block;
+            padding: 0.32rem 0.62rem;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 800;
+            border: 1px solid transparent;
+        }
+
+        .status-pendiente {
+            background: rgba(245, 158, 11, 0.16);
+            color: #FFD98A;
+            border-color: rgba(245, 158, 11, 0.30);
+        }
+
+        .status-verificando {
+            background: rgba(59, 130, 246, 0.16);
+            color: #A9CCFF;
+            border-color: rgba(59, 130, 246, 0.30);
+        }
+
+        .status-aprobado {
+            background: rgba(34, 197, 94, 0.16);
+            color: #A8F0BF;
+            border-color: rgba(34, 197, 94, 0.30);
+        }
+
+        .status-rechazado {
+            background: rgba(239, 68, 68, 0.16);
+            color: #FFB4B4;
+            border-color: rgba(239, 68, 68, 0.30);
+        }
+
+        .sidebar-brand {
+            text-align: center;
+            padding: 0.45rem 0 1rem 0;
+        }
+
+        .sidebar-brand-icon {
+            width: 54px;
+            height: 54px;
+            border-radius: 16px;
+            margin: 0 auto 0.7rem auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(145deg, #164A91, #0A2852);
+            border: 1px solid rgba(255,255,255,0.12);
+            box-shadow: 0 14px 30px rgba(0,0,0,0.24);
+            font-size: 1.7rem;
+        }
+
+        .sidebar-brand-name {
+            font-size: 1rem;
+            font-weight: 850;
+            letter-spacing: -0.02em;
+        }
+
+        .sidebar-brand-sub {
+            font-size: 0.72rem;
+            color: #AFC3DF;
+            margin-top: 0.18rem;
+        }
+
+        @media (max-width: 900px) {
+            .jet-hero-title {
+                font-size: 1.55rem;
+            }
+
+            .jet-hero::after {
+                font-size: 5.5rem;
+                right: 0.7rem;
+            }
+
+            .block-container {
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+            }
         }
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+        """
+    estilos = estilos.replace("__FONDO_AVION__", fondo_css)
+    st.markdown(estilos, unsafe_allow_html=True)
 
 
 aplicar_estilo_corporativo()
@@ -234,6 +488,32 @@ def crear_base_datos():
             conn.execute(
                 "ALTER TABLE ventas ADD COLUMN creado_por TEXT NOT NULL DEFAULT ''"
             )
+
+        # Campos de control del pago y comprobante.
+        columnas_nuevas = {
+            "numero_transaccion": "TEXT",
+            "banco": "TEXT",
+            "fecha_hora_pago": "TEXT",
+            "estado_pago": "TEXT NOT NULL DEFAULT 'Pendiente'",
+            "comprobante": "BLOB",
+            "comprobante_mime": "TEXT",
+            "comprobante_nombre": "TEXT",
+        }
+
+        for nombre_columna, tipo_columna in columnas_nuevas.items():
+            if nombre_columna not in columnas_ventas:
+                conn.execute(
+                    f"ALTER TABLE ventas ADD COLUMN {nombre_columna} {tipo_columna}"
+                )
+
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ventas_numero_transaccion
+            ON ventas(numero_transaccion)
+            WHERE numero_transaccion IS NOT NULL
+              AND TRIM(numero_transaccion) <> ''
+            """
+        )
 
         conn.execute(
             """
@@ -383,7 +663,41 @@ def cambiar_password_usuario(id_usuario, nueva_password):
         conn.commit()
 
 
-def guardar_venta(fecha, curso, monto, cliente, vendedor, tipo_cambio, creado_por):
+def numero_transaccion_existe(numero_transaccion):
+    numero = numero_transaccion.strip()
+    if not numero:
+        return False
+
+    with conectar() as conn:
+        resultado = conn.execute(
+            """
+            SELECT 1
+            FROM ventas
+            WHERE LOWER(TRIM(numero_transaccion)) = LOWER(TRIM(?))
+            LIMIT 1
+            """,
+            (numero,),
+        ).fetchone()
+
+    return resultado is not None
+
+
+def guardar_venta(
+    fecha,
+    curso,
+    monto,
+    cliente,
+    vendedor,
+    tipo_cambio,
+    creado_por,
+    numero_transaccion,
+    banco,
+    fecha_hora_pago,
+    estado_pago,
+    comprobante_bytes,
+    comprobante_mime,
+    comprobante_nombre,
+):
     datos = COMISIONES[curso]
     comision_bs = (
         datos["monto"] * tipo_cambio
@@ -398,9 +712,11 @@ def guardar_venta(fecha, curso, monto, cliente, vendedor, tipo_cambio, creado_po
             INSERT INTO ventas (
                 fecha, curso, monto, cliente, vendedor,
                 comision_original, moneda_comision, tipo_cambio,
-                comision_bs, ingreso_neto_bs, creado_por, creado_en
+                comision_bs, ingreso_neto_bs, creado_por, creado_en,
+                numero_transaccion, banco, fecha_hora_pago, estado_pago,
+                comprobante, comprobante_mime, comprobante_nombre
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fecha.isoformat(),
@@ -415,12 +731,18 @@ def guardar_venta(fecha, curso, monto, cliente, vendedor, tipo_cambio, creado_po
                 float(ingreso_neto),
                 creado_por,
                 datetime.now().isoformat(timespec="seconds"),
+                numero_transaccion.strip(),
+                banco.strip(),
+                fecha_hora_pago.isoformat(timespec="minutes"),
+                estado_pago,
+                comprobante_bytes,
+                comprobante_mime,
+                comprobante_nombre,
             ),
         )
         conn.commit()
 
     return comision_bs, ingreso_neto
-
 
 def cargar_ventas():
     with conectar() as conn:
@@ -584,6 +906,11 @@ def generar_reporte_excel(df):
             "tipo_cambio",
             "comision_bs",
             "ingreso_neto_bs",
+            "numero_transaccion",
+            "banco",
+            "fecha_hora_pago",
+            "estado_pago",
+            "comprobante_nombre",
         ]
     ].rename(
         columns={
@@ -597,6 +924,11 @@ def generar_reporte_excel(df):
             "tipo_cambio": "Tipo_cambio",
             "comision_bs": "Comision_Bs",
             "ingreso_neto_bs": "Ingreso_neto_Bs",
+            "numero_transaccion": "Numero_transaccion",
+            "banco": "Banco",
+            "fecha_hora_pago": "Fecha_hora_pago",
+            "estado_pago": "Estado_pago",
+            "comprobante_nombre": "Comprobante",
         }
     )
 
@@ -851,23 +1183,70 @@ with cabecera_1:
         st.image(str(LOGO_PATH), use_container_width=True)
 with cabecera_2:
     st.title("Jet Airways Academy")
-    st.subheader("Sistema Profesional de Gestión de Ventas")
+    st.caption("Executive Sales CRM · Plataforma interna de gestión comercial")
 st.caption(
     f"Sesión: **{usuario_actual['nombre']}** · "
     f"Usuario: **{usuario_actual['usuario']}** · "
     f"Rol: **{rol_actual}**"
 )
 
-with st.sidebar:
-    st.header("Navegación")
+st.markdown(
+    f"""
+    <div class="jet-hero">
+        <div class="jet-kicker">Executive Sales Intelligence</div>
+        <div class="jet-hero-title">Centro de Gestión Comercial</div>
+        <p class="jet-hero-copy">
+            Ventas, comisiones, comprobantes y rendimiento comercial reunidos
+            en una sola plataforma segura para Jet Airways Academy.
+        </p>
+        <span class="jet-badge">
+            Sesión activa · {usuario_actual["nombre"]} · {rol_actual}
+        </span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-    opciones = ["Registrar venta", "Dashboard", "Consultar ventas"]
+with st.sidebar:
+    if LOGO_PATH.exists():
+        logo_col_1, logo_col_2, logo_col_3 = st.columns([0.25, 1, 0.25])
+        with logo_col_2:
+            st.image(str(LOGO_PATH), use_container_width=True)
+    else:
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-icon">✈️</div>
+                <div class="sidebar-brand-name">Jet Airways Academy</div>
+                <div class="sidebar-brand-sub">Executive Sales CRM</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<div class="jet-section-title">Navegación</div>',
+        unsafe_allow_html=True,
+    )
+
+    etiquetas_menu = {
+        "Registrar venta": "✦  Registrar venta",
+        "Dashboard": "◈  Dashboard ejecutivo",
+        "Consultar ventas": "⌕  Consultar ventas",
+        "Exportar y respaldo": "⇩  Exportar y respaldo",
+        "Editar o eliminar": "✎  Editar o eliminar",
+        "Importar Excel": "↥  Importar Excel",
+        "Usuarios": "◎  Usuarios",
+        "Configuración": "⚙  Configuración",
+    }
+
+    opciones_internas = ["Registrar venta", "Dashboard", "Consultar ventas"]
 
     if rol_actual in ["Administrador", "Supervisor"]:
-        opciones.append("Exportar y respaldo")
+        opciones_internas.append("Exportar y respaldo")
 
     if rol_actual == "Administrador":
-        opciones.extend(
+        opciones_internas.extend(
             [
                 "Editar o eliminar",
                 "Importar Excel",
@@ -876,7 +1255,16 @@ with st.sidebar:
             ]
         )
 
-    seccion = st.radio("Selecciona una sección", opciones)
+    opciones_visibles = [etiquetas_menu[opcion] for opcion in opciones_internas]
+    seleccion_visible = st.radio(
+        "Selecciona una sección",
+        opciones_visibles,
+        label_visibility="collapsed",
+    )
+    seccion = {
+        etiqueta: interna
+        for interna, etiqueta in etiquetas_menu.items()
+    }[seleccion_visible]
     st.divider()
     st.write(f"**{usuario_actual['nombre']}**")
     st.caption(rol_actual)
@@ -888,13 +1276,16 @@ with st.sidebar:
 # ------------------------------------------------------------
 
 if seccion == "Registrar venta":
-    st.subheader("Registrar nueva venta")
+    st.markdown('<div class="jet-section-title">Registrar nueva venta</div>', unsafe_allow_html=True)
+    st.caption(
+        "Registra la información de la venta y adjunta el extracto o comprobante de pago."
+    )
 
     with st.form("registro_venta", clear_on_submit=True):
         c1, c2 = st.columns(2)
 
         with c1:
-            fecha = st.date_input("Fecha", value=date.today())
+            fecha = st.date_input("Fecha de la venta", value=date.today())
             curso = st.selectbox("Curso", list(COMISIONES.keys()))
             monto = st.number_input(
                 "Monto de la venta (Bs)",
@@ -902,9 +1293,9 @@ if seccion == "Registrar venta":
                 value=1000.00,
                 step=10.00,
             )
+            cliente = st.text_input("Cliente")
 
         with c2:
-            cliente = st.text_input("Cliente")
             vendedor = st.selectbox(
                 "Vendedor",
                 VENDEDORES_PREDETERMINADOS + ["Otro"],
@@ -918,6 +1309,59 @@ if seccion == "Registrar venta":
                 min_value=0.01,
                 value=float(TIPO_CAMBIO_USD_BS),
                 step=0.01,
+            )
+            numero_transaccion = st.text_input(
+                "Número de transacción",
+                placeholder="Ej.: 45893271 o TRX-45893271",
+            )
+            banco = st.selectbox(
+                "Banco o medio de pago",
+                [
+                    "Banco Nacional de Bolivia (BNB)",
+                    "Banco Mercantil Santa Cruz",
+                    "Banco de Crédito BCP",
+                    "Banco Bisa",
+                    "Banco Unión",
+                    "Banco Económico",
+                    "Banco Ganadero",
+                    "QR",
+                    "Efectivo",
+                    "Otro",
+                ],
+            )
+
+        st.write("#### Información del pago")
+        p1, p2 = st.columns(2)
+        with p1:
+            fecha_pago = st.date_input("Fecha del pago", value=date.today())
+        with p2:
+            hora_pago = st.time_input(
+                "Hora del pago",
+                value=datetime.now().time().replace(second=0, microsecond=0),
+            )
+
+        estado_pago = st.selectbox(
+            "Estado del pago",
+            ["Pendiente", "Verificando", "Aprobado", "Rechazado"],
+            index=0,
+        )
+
+        metodo_comprobante = st.radio(
+            "¿Cómo deseas adjuntar el comprobante?",
+            ["Subir archivo", "Tomar foto"],
+            horizontal=True,
+        )
+
+        comprobante = None
+        if metodo_comprobante == "Subir archivo":
+            comprobante = st.file_uploader(
+                "Sube el extracto o comprobante",
+                type=["png", "jpg", "jpeg", "webp", "pdf"],
+                help="Formatos permitidos: PNG, JPG, WEBP o PDF.",
+            )
+        else:
+            comprobante = st.camera_input(
+                "Toma una foto del extracto o comprobante"
             )
 
         datos_comision = COMISIONES[curso]
@@ -934,34 +1378,73 @@ if seccion == "Registrar venta":
         m3.metric("Ingreso neto", f"Bs {neto_estimado:,.2f}")
 
         guardar = st.form_submit_button(
-            "Guardar venta",
+            "Guardar venta y comprobante",
             type="primary",
             use_container_width=True,
         )
 
         if guardar:
-            vendedor_final = vendedor_otro.strip() if vendedor == "Otro" else vendedor
+            vendedor_final = (
+                vendedor_otro.strip() if vendedor == "Otro" else vendedor
+            )
+            transaccion_limpia = numero_transaccion.strip()
+            fecha_hora_pago = datetime.combine(fecha_pago, hora_pago)
 
             if not cliente.strip():
                 st.error("Debes ingresar el nombre del cliente.")
             elif not vendedor_final:
                 st.error("Debes ingresar el nombre del vendedor.")
+            elif not transaccion_limpia:
+                st.error("Debes ingresar el número de transacción.")
+            elif numero_transaccion_existe(transaccion_limpia):
+                st.error(
+                    "Ese número de transacción ya está registrado. "
+                    "Verifica el dato antes de continuar."
+                )
+            elif comprobante is None:
+                st.error("Debes subir o tomar una foto del comprobante.")
             else:
-                comision, neto = guardar_venta(
-                    fecha,
-                    curso,
-                    monto,
-                    cliente,
-                    vendedor_final,
-                    tipo_cambio,
-                    usuario_actual["usuario"],
+                comprobante_bytes = comprobante.getvalue()
+                comprobante_mime = getattr(
+                    comprobante,
+                    "type",
+                    "image/jpeg",
                 )
-                st.success(
-                    f"Venta guardada. Comisión: Bs {comision:,.2f} | "
-                    f"Ingreso neto: Bs {neto:,.2f}"
+                comprobante_nombre = getattr(
+                    comprobante,
+                    "name",
+                    f"comprobante_{transaccion_limpia}.jpg",
                 )
-                if neto < 0:
-                    st.warning("La comisión supera el monto de la venta.")
+
+                try:
+                    comision, neto = guardar_venta(
+                        fecha,
+                        curso,
+                        monto,
+                        cliente,
+                        vendedor_final,
+                        tipo_cambio,
+                        usuario_actual["usuario"],
+                        transaccion_limpia,
+                        banco,
+                        fecha_hora_pago,
+                        estado_pago,
+                        comprobante_bytes,
+                        comprobante_mime,
+                        comprobante_nombre,
+                    )
+                    st.success(
+                        f"Venta guardada correctamente. "
+                        f"Comisión: Bs {comision:,.2f} | "
+                        f"Ingreso neto: Bs {neto:,.2f}"
+                    )
+                    if neto < 0:
+                        st.warning("La comisión supera el monto de la venta.")
+                except sqlite3.IntegrityError:
+                    st.error(
+                        "No se pudo guardar: el número de transacción ya existe."
+                    )
+
 
 # ------------------------------------------------------------
 # DASHBOARD
@@ -977,7 +1460,7 @@ elif seccion == "Dashboard":
         st.info("Todavía no existen ventas registradas.")
         st.stop()
 
-    st.subheader("Dashboard ejecutivo")
+    st.markdown('<div class="jet-section-title">Dashboard ejecutivo</div>', unsafe_allow_html=True)
 
     minimo = df["fecha"].min().date()
     maximo = df["fecha"].max().date()
@@ -1031,6 +1514,23 @@ elif seccion == "Dashboard":
     k3.metric("Ingreso neto", f"Bs {neto:,.2f}")
     k4.metric("Ventas", f"{cantidad:,}")
     k5.metric("Ticket promedio", f"Bs {promedio:,.2f}")
+
+    if "estado_pago" in filtrado.columns:
+        estados = (
+            filtrado["estado_pago"]
+            .fillna("Pendiente")
+            .replace("", "Pendiente")
+            .value_counts()
+        )
+        st.markdown(
+            '<div class="jet-section-title">Control de pagos</div>',
+            unsafe_allow_html=True,
+        )
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric("Pendientes", int(estados.get("Pendiente", 0)))
+        e2.metric("Verificando", int(estados.get("Verificando", 0)))
+        e3.metric("Aprobados", int(estados.get("Aprobado", 0)))
+        e4.metric("Rechazados", int(estados.get("Rechazado", 0)))
 
     por_curso = (
         filtrado.groupby("curso", as_index=False)
@@ -1106,7 +1606,7 @@ elif seccion == "Consultar ventas":
 
     if rol_actual == "Vendedor" and not df.empty:
         df = df[df["creado_por"] == usuario_actual["usuario"]].copy()
-    st.subheader("Consultar y filtrar ventas")
+    st.markdown('<div class="jet-section-title">Consultar y filtrar ventas</div>', unsafe_allow_html=True)
 
     if df.empty:
         st.info("No existen ventas registradas.")
@@ -1154,6 +1654,11 @@ elif seccion == "Consultar ventas":
             "comision_bs": "Comisión Bs",
             "ingreso_neto_bs": "Ingreso neto Bs",
             "creado_por": "Registrado por",
+            "numero_transaccion": "N.º transacción",
+            "banco": "Banco",
+            "fecha_hora_pago": "Fecha/hora pago",
+            "estado_pago": "Estado del pago",
+            "comprobante_nombre": "Comprobante",
         }
     )[
         [
@@ -1165,6 +1670,11 @@ elif seccion == "Consultar ventas":
             "Vendedor",
             "Comisión Bs",
             "Ingreso neto Bs",
+            "N.º transacción",
+            "Banco",
+            "Fecha/hora pago",
+            "Estado del pago",
+            "Comprobante",
             "Registrado por",
         ]
     ]
@@ -1180,13 +1690,85 @@ elif seccion == "Consultar ventas":
         },
     )
 
+    st.write("#### Revisar comprobante")
+
+    opciones_comprobante = {
+        (
+            f"ID {int(fila.id)} · {fila.cliente} · "
+            f"{fila.numero_transaccion or 'Sin transacción'}"
+        ): int(fila.id)
+        for fila in filtrado.itertuples()
+        if getattr(fila, "comprobante", None) is not None
+    }
+
+    if opciones_comprobante:
+        seleccion_comprobante = st.selectbox(
+            "Selecciona una venta para revisar su comprobante",
+            list(opciones_comprobante.keys()),
+        )
+        id_comprobante = opciones_comprobante[seleccion_comprobante]
+        venta_comprobante = filtrado[
+            filtrado["id"] == id_comprobante
+        ].iloc[0]
+
+        datos_archivo = venta_comprobante["comprobante"]
+        mime_archivo = (
+            venta_comprobante["comprobante_mime"]
+            or "application/octet-stream"
+        )
+        nombre_archivo = (
+            venta_comprobante["comprobante_nombre"]
+            or f"comprobante_{id_comprobante}"
+        )
+
+        d1, d2 = st.columns([1.3, 0.7])
+        with d1:
+            if str(mime_archivo).startswith("image/"):
+                st.image(
+                    datos_archivo,
+                    caption=(
+                        f"Transacción: "
+                        f"{venta_comprobante['numero_transaccion']}"
+                    ),
+                    use_container_width=True,
+                )
+            elif mime_archivo == "application/pdf":
+                st.info(
+                    "El comprobante es un PDF. Utiliza el botón de descarga "
+                    "para abrirlo."
+                )
+            else:
+                st.info("El archivo puede descargarse para su revisión.")
+
+        with d2:
+            st.write(
+                f"**Banco:** {venta_comprobante['banco'] or '-'}"
+            )
+            st.write(
+                f"**Estado:** "
+                f"{venta_comprobante['estado_pago'] or 'Pendiente'}"
+            )
+            st.write(
+                f"**Fecha/hora:** "
+                f"{venta_comprobante['fecha_hora_pago'] or '-'}"
+            )
+            st.download_button(
+                "Descargar comprobante",
+                data=datos_archivo,
+                file_name=nombre_archivo,
+                mime=mime_archivo,
+                use_container_width=True,
+            )
+    else:
+        st.info("No hay comprobantes disponibles con los filtros actuales.")
+
 # ------------------------------------------------------------
 # EDITAR / ELIMINAR
 # ------------------------------------------------------------
 
 elif seccion == "Editar o eliminar":
     df = cargar_ventas()
-    st.subheader("Editar o eliminar una venta")
+    st.markdown('<div class="jet-section-title">Editar o eliminar una venta</div>', unsafe_allow_html=True)
 
     if df.empty:
         st.info("No existen ventas registradas.")
@@ -1266,7 +1848,7 @@ elif seccion == "Editar o eliminar":
 # ------------------------------------------------------------
 
 elif seccion == "Importar Excel":
-    st.subheader("Importar ventas desde Excel")
+    st.markdown('<div class="jet-section-title">Importar ventas desde Excel</div>', unsafe_allow_html=True)
     st.write(
         "El archivo debe incluir: Fecha, Curso, Monto, Cliente y Vendedor. "
         "También se acepta una columna llamada Tipo_ingreso."
@@ -1309,7 +1891,7 @@ elif seccion == "Importar Excel":
 # ------------------------------------------------------------
 
 elif seccion == "Exportar y respaldo":
-    st.subheader("Exportar reportes y crear respaldos")
+    st.markdown('<div class="jet-section-title">Exportar reportes y respaldos</div>', unsafe_allow_html=True)
     df = cargar_ventas()
 
     if df.empty:
@@ -1350,7 +1932,7 @@ elif seccion == "Exportar y respaldo":
 # ------------------------------------------------------------
 
 elif seccion == "Usuarios":
-    st.subheader("Administración de usuarios")
+    st.markdown('<div class="jet-section-title">Administración de usuarios</div>', unsafe_allow_html=True)
 
     tab_crear, tab_estado, tab_password = st.tabs(
         ["Crear usuario", "Activar o bloquear", "Cambiar contraseña"]
@@ -1452,7 +2034,7 @@ elif seccion == "Usuarios":
 
 
 elif seccion == "Configuración":
-    st.subheader("Configuración actual")
+    st.markdown('<div class="jet-section-title">Configuración del sistema</div>', unsafe_allow_html=True)
 
     st.write(f"**Tipo de cambio predeterminado:** {TIPO_CAMBIO_USD_BS}")
 
