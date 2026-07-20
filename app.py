@@ -33,7 +33,6 @@ BACKGROUND_PATH = (
 
 
 def cargar_fondo_css():
-    """Devuelve la imagen del fondo como data URI sin modificar la aplicación."""
     if not BACKGROUND_PATH.exists():
         return ""
     contenido = base64.b64encode(BACKGROUND_PATH.read_bytes()).decode("utf-8")
@@ -440,12 +439,30 @@ COMISIONES = {
     "MTC": {"monto": 60.0, "moneda": "USD"},
 }
 
+SEDES_VENDEDORES = {
+    "La Paz": [
+        "Mateo Trillo",
+        "Luciana Monasterios",
+    ],
+    "El Alto": [
+        "Aaron Daza",
+    ],
+    "Santa Cruz": [
+        "Paul Chire",
+        "Elena Ojopi",
+        "Wara Vallejos",
+        "Marvin Cespedes",
+    ],
+    "Cochabamba": [
+        "Josué Ramos",
+    ],
+}
+
+SEDES = list(SEDES_VENDEDORES.keys())
 VENDEDORES_PREDETERMINADOS = [
-    "Ana",
-    "Carlos",
-    "Daniela",
-    "José",
-    "María",
+    vendedor
+    for vendedores_sede in SEDES_VENDEDORES.values()
+    for vendedor in vendedores_sede
 ]
 
 ROLES = ["Administrador", "Supervisor", "Vendedor"]
@@ -487,6 +504,11 @@ def crear_base_datos():
         if "creado_por" not in columnas_ventas:
             conn.execute(
                 "ALTER TABLE ventas ADD COLUMN creado_por TEXT NOT NULL DEFAULT ''"
+            )
+
+        if "sede" not in columnas_ventas:
+            conn.execute(
+                "ALTER TABLE ventas ADD COLUMN sede TEXT NOT NULL DEFAULT ''"
             )
 
         # Campos de control del pago y comprobante.
@@ -688,6 +710,7 @@ def guardar_venta(
     monto,
     cliente,
     vendedor,
+    sede,
     tipo_cambio,
     creado_por,
     numero_transaccion,
@@ -710,13 +733,13 @@ def guardar_venta(
         conn.execute(
             """
             INSERT INTO ventas (
-                fecha, curso, monto, cliente, vendedor,
+                fecha, curso, monto, cliente, vendedor, sede,
                 comision_original, moneda_comision, tipo_cambio,
                 comision_bs, ingreso_neto_bs, creado_por, creado_en,
                 numero_transaccion, banco, fecha_hora_pago, estado_pago,
                 comprobante, comprobante_mime, comprobante_nombre
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fecha.isoformat(),
@@ -724,6 +747,7 @@ def guardar_venta(
                 float(monto),
                 cliente.strip(),
                 vendedor.strip(),
+                sede.strip(),
                 datos["monto"],
                 datos["moneda"],
                 float(tipo_cambio),
@@ -757,7 +781,7 @@ def cargar_ventas():
     return df
 
 
-def actualizar_venta(id_venta, fecha, curso, monto, cliente, vendedor, tipo_cambio):
+def actualizar_venta(id_venta, fecha, curso, monto, cliente, vendedor, sede, tipo_cambio):
     datos = COMISIONES[curso]
     comision_bs = (
         datos["monto"] * tipo_cambio
@@ -770,7 +794,7 @@ def actualizar_venta(id_venta, fecha, curso, monto, cliente, vendedor, tipo_camb
         conn.execute(
             """
             UPDATE ventas
-            SET fecha = ?, curso = ?, monto = ?, cliente = ?, vendedor = ?,
+            SET fecha = ?, curso = ?, monto = ?, cliente = ?, vendedor = ?, sede = ?,
                 comision_original = ?, moneda_comision = ?, tipo_cambio = ?,
                 comision_bs = ?, ingreso_neto_bs = ?
             WHERE id = ?
@@ -781,6 +805,7 @@ def actualizar_venta(id_venta, fecha, curso, monto, cliente, vendedor, tipo_camb
                 float(monto),
                 cliente.strip(),
                 vendedor.strip(),
+                sede.strip(),
                 datos["monto"],
                 datos["moneda"],
                 float(tipo_cambio),
@@ -824,6 +849,9 @@ def importar_dataframe(df, tipo_cambio):
     df["Monto"] = pd.to_numeric(df["Monto"], errors="coerce")
     df["Cliente"] = df["Cliente"].astype(str).str.strip()
     df["Vendedor"] = df["Vendedor"].astype(str).str.strip()
+    if "Sede" not in df.columns:
+        df["Sede"] = "Sin especificar"
+    df["Sede"] = df["Sede"].astype(str).str.strip().replace("", "Sin especificar")
 
     errores = df[
         df["Fecha"].isna()
@@ -854,6 +882,7 @@ def importar_dataframe(df, tipo_cambio):
                 float(fila["Monto"]),
                 fila["Cliente"],
                 fila["Vendedor"],
+                fila["Sede"],
                 datos["monto"],
                 datos["moneda"],
                 float(tipo_cambio),
@@ -868,11 +897,11 @@ def importar_dataframe(df, tipo_cambio):
             conn.executemany(
                 """
                 INSERT INTO ventas (
-                    fecha, curso, monto, cliente, vendedor,
+                    fecha, curso, monto, cliente, vendedor, sede,
                     comision_original, moneda_comision, tipo_cambio,
                     comision_bs, ingreso_neto_bs, creado_en
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 registros,
             )
@@ -901,6 +930,7 @@ def generar_reporte_excel(df):
             "monto",
             "cliente",
             "vendedor",
+            "sede",
             "comision_original",
             "moneda_comision",
             "tipo_cambio",
@@ -919,6 +949,7 @@ def generar_reporte_excel(df):
             "monto": "Ingreso_bruto_Bs",
             "cliente": "Cliente",
             "vendedor": "Vendedor",
+            "sede": "Sede",
             "comision_original": "Comision_original",
             "moneda_comision": "Moneda_comision",
             "tipo_cambio": "Tipo_cambio",
@@ -954,6 +985,21 @@ def generar_reporte_excel(df):
             Cantidad_ventas=("id", "count"),
         )
         .rename(columns={"vendedor": "Vendedor"})
+        .sort_values("Ingreso_neto_Bs", ascending=False)
+    )
+
+    resumen_sede = (
+        trabajo.assign(
+            sede=trabajo["sede"].fillna("").replace("", "Sin especificar")
+        )
+        .groupby("sede", as_index=False)
+        .agg(
+            Ingreso_bruto_Bs=("monto", "sum"),
+            Comisiones_Bs=("comision_bs", "sum"),
+            Ingreso_neto_Bs=("ingreso_neto_bs", "sum"),
+            Cantidad_ventas=("id", "count"),
+        )
+        .rename(columns={"sede": "Sede"})
         .sort_values("Ingreso_neto_Bs", ascending=False)
     )
 
@@ -1014,6 +1060,7 @@ def generar_reporte_excel(df):
         ventas.to_excel(writer, sheet_name="Ventas", index=False)
         resumen_curso.to_excel(writer, sheet_name="Resumen por curso", index=False)
         resumen_vendedor.to_excel(writer, sheet_name="Resumen vendedores", index=False)
+        resumen_sede.to_excel(writer, sheet_name="Resumen sedes", index=False)
         resumen_diario.to_excel(writer, sheet_name="Resumen diario", index=False)
         resumen_mensual.to_excel(writer, sheet_name="Resumen mensual", index=False)
 
@@ -1296,9 +1343,13 @@ if seccion == "Registrar venta":
             cliente = st.text_input("Cliente")
 
         with c2:
+            sede = st.selectbox(
+                "Sede",
+                SEDES,
+            )
             vendedor = st.selectbox(
                 "Vendedor",
-                VENDEDORES_PREDETERMINADOS + ["Otro"],
+                SEDES_VENDEDORES[sede] + ["Otro"],
             )
             vendedor_otro = ""
             if vendedor == "Otro":
@@ -1423,6 +1474,7 @@ if seccion == "Registrar venta":
                         monto,
                         cliente,
                         vendedor_final,
+                        sede,
                         tipo_cambio,
                         usuario_actual["usuario"],
                         transaccion_limpia,
@@ -1465,7 +1517,9 @@ elif seccion == "Dashboard":
     minimo = df["fecha"].min().date()
     maximo = df["fecha"].max().date()
 
-    c1, c2, c3 = st.columns(3)
+    df["sede"] = df["sede"].fillna("").replace("", "Sin especificar")
+
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         fechas = st.date_input(
             "Rango de fechas",
@@ -1474,12 +1528,18 @@ elif seccion == "Dashboard":
             max_value=maximo,
         )
     with c2:
+        sedes = st.multiselect(
+            "Sedes",
+            sorted(df["sede"].unique()),
+            default=sorted(df["sede"].unique()),
+        )
+    with c3:
         cursos = st.multiselect(
             "Cursos",
             sorted(df["curso"].unique()),
             default=sorted(df["curso"].unique()),
         )
-    with c3:
+    with c4:
         vendedores = st.multiselect(
             "Vendedores",
             sorted(df["vendedor"].unique()),
@@ -1494,6 +1554,7 @@ elif seccion == "Dashboard":
     filtrado = df[
         (df["fecha"].dt.date >= inicio)
         & (df["fecha"].dt.date <= fin)
+        & (df["sede"].isin(sedes))
         & (df["curso"].isin(cursos))
         & (df["vendedor"].isin(vendedores))
     ].copy()
@@ -1803,7 +1864,23 @@ elif seccion == "Editar o eliminar":
 
         with c2:
             cliente = st.text_input("Cliente", value=registro["cliente"])
-            vendedor = st.text_input("Vendedor", value=registro["vendedor"])
+            sede_actual = registro.get("sede", "") or "La Paz"
+            opciones_sede = SEDES if sede_actual in SEDES else SEDES + [sede_actual]
+            sede = st.selectbox(
+                "Sede",
+                opciones_sede,
+                index=opciones_sede.index(sede_actual),
+            )
+            vendedores_sede = SEDES_VENDEDORES.get(sede, [])
+            vendedor_actual = registro["vendedor"]
+            opciones_vendedor = vendedores_sede.copy()
+            if vendedor_actual not in opciones_vendedor:
+                opciones_vendedor.append(vendedor_actual)
+            vendedor = st.selectbox(
+                "Vendedor",
+                opciones_vendedor,
+                index=opciones_vendedor.index(vendedor_actual),
+            )
             tipo_cambio = st.number_input(
                 "Tipo de cambio",
                 min_value=0.01,
@@ -1828,6 +1905,7 @@ elif seccion == "Editar o eliminar":
                     monto,
                     cliente,
                     vendedor,
+                    sede,
                     tipo_cambio,
                 )
                 st.success("Venta actualizada correctamente.")
@@ -1851,6 +1929,7 @@ elif seccion == "Importar Excel":
     st.markdown('<div class="jet-section-title">Importar ventas desde Excel</div>', unsafe_allow_html=True)
     st.write(
         "El archivo debe incluir: Fecha, Curso, Monto, Cliente y Vendedor. "
+        "También puede incluir la columna Sede. "
         "También se acepta una columna llamada Tipo_ingreso."
     )
 
