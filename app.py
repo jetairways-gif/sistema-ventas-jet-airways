@@ -1347,13 +1347,11 @@ if seccion == "Registrar venta":
                 "Sede",
                 SEDES,
             )
-            vendedor = st.selectbox(
-                "Vendedor",
-                SEDES_VENDEDORES[sede] + ["Otro"],
+            vendedor = st.text_input(
+                "Nombre del vendedor",
+                placeholder="Escribe tu nombre completo",
+                help="Escribe el nombre tal como debe aparecer en los reportes.",
             )
-            vendedor_otro = ""
-            if vendedor == "Otro":
-                vendedor_otro = st.text_input("Nombre del vendedor")
 
             tipo_cambio = st.number_input(
                 "Tipo de cambio USD/BOB",
@@ -1435,9 +1433,7 @@ if seccion == "Registrar venta":
         )
 
         if guardar:
-            vendedor_final = (
-                vendedor_otro.strip() if vendedor == "Otro" else vendedor
-            )
+            vendedor_final = vendedor.strip()
             transaccion_limpia = numero_transaccion.strip()
             fecha_hora_pago = datetime.combine(fecha_pago, hora_pago)
 
@@ -1871,15 +1867,10 @@ elif seccion == "Editar o eliminar":
                 opciones_sede,
                 index=opciones_sede.index(sede_actual),
             )
-            vendedores_sede = SEDES_VENDEDORES.get(sede, [])
-            vendedor_actual = registro["vendedor"]
-            opciones_vendedor = vendedores_sede.copy()
-            if vendedor_actual not in opciones_vendedor:
-                opciones_vendedor.append(vendedor_actual)
-            vendedor = st.selectbox(
-                "Vendedor",
-                opciones_vendedor,
-                index=opciones_vendedor.index(vendedor_actual),
+            vendedor = st.text_input(
+                "Nombre del vendedor",
+                value=str(registro["vendedor"]),
+                help="Puedes corregir o reemplazar libremente el nombre.",
             )
             tipo_cambio = st.number_input(
                 "Tipo de cambio",
