@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import secrets
+import re
 import sqlite3
 from datetime import date, datetime
 from io import BytesIO
@@ -426,43 +427,32 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "ventas.db"
 LOGO_PATH = BASE_DIR / "assets" / "logo_jet_airways.png"
 
-TIPO_CAMBIO_USD_BS = 6.96
+TIPO_CAMBIO_INICIAL = 6.96
 
-COMISIONES = {
-    "PPL": {"monto": 100.0, "moneda": "USD"},
-    "PPC": {"monto": 275.0, "moneda": "USD"},
-    "IFR": {"monto": 275.0, "moneda": "USD"},
-    "TCP": {"monto": 50.0, "moneda": "USD"},
-    "EOU": {"monto": 30.0, "moneda": "USD"},
-    "AGT": {"monto": 120.0, "moneda": "BOB"},
-    "AGR": {"monto": 140.0, "moneda": "BOB"},
-    "MTC": {"monto": 60.0, "moneda": "USD"},
+CURSOS_INICIALES = {
+    "PPL": {"nombre": "PPL", "monto": 100.0, "moneda": "USD"},
+    "PPC": {"nombre": "PPC", "monto": 275.0, "moneda": "USD"},
+    "IFR": {"nombre": "IFR", "monto": 275.0, "moneda": "USD"},
+    "TCP": {"nombre": "TCP", "monto": 50.0, "moneda": "USD"},
+    "EOU": {"nombre": "EOU", "monto": 30.0, "moneda": "USD"},
+    "AGT": {"nombre": "AGT", "monto": 120.0, "moneda": "BOB"},
+    "AGR": {"nombre": "AGR", "monto": 140.0, "moneda": "BOB"},
+    "MTC": {"nombre": "MTC", "monto": 60.0, "moneda": "USD"},
 }
 
-SEDES_VENDEDORES = {
-    "La Paz": [
-        "Mateo Trillo",
-        "Luciana Monasterios",
-    ],
-    "El Alto": [
-        "Aaron Daza",
-    ],
-    "Santa Cruz": [
-        "Paul Chire",
-        "Elena Ojopi",
-        "Wara Vallejos",
-        "Marvin Cespedes",
-    ],
-    "Cochabamba": [
-        "Josué Ramos",
-    ],
-}
+SEDES_INICIALES = ["La Paz", "El Alto", "Santa Cruz", "Cochabamba"]
 
-SEDES = list(SEDES_VENDEDORES.keys())
-VENDEDORES_PREDETERMINADOS = [
-    vendedor
-    for vendedores_sede in SEDES_VENDEDORES.values()
-    for vendedor in vendedores_sede
+BANCOS_INICIALES = [
+    "Banco Nacional de Bolivia (BNB)",
+    "Banco Mercantil Santa Cruz",
+    "Banco de Crédito BCP",
+    "Banco Bisa",
+    "Banco Unión",
+    "Banco Económico",
+    "Banco Ganadero",
+    "QR",
+    "Efectivo",
+    "Otro",
 ]
 
 ROLES = ["Administrador", "Supervisor", "Vendedor"]
@@ -551,8 +541,423 @@ def crear_base_datos():
             )
             """
         )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cursos (
+                codigo TEXT PRIMARY KEY,
+                nombre TEXT NOT NULL,
+                comision REAL NOT NULL,
+                moneda TEXT NOT NULL,
+                activo INTEGER NOT NULL DEFAULT 1,
+                creado_en TEXT NOT NULL,
+                actualizado_en TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sedes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL UNIQUE,
+                activo INTEGER NOT NULL DEFAULT 1,
+                creado_en TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bancos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL UNIQUE,
+                activo INTEGER NOT NULL DEFAULT 1,
+                creado_en TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS configuracion (
+                clave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL,
+                actualizado_en TEXT NOT NULL
+            )
+            """
+        )
+
+        ahora = datetime.now().isoformat(timespec="seconds")
+
+        cantidad_cursos = conn.execute("SELECT COUNT(*) FROM cursos").fetchone()[0]
+        if cantidad_cursos == 0:
+            conn.executemany(
+                """
+                INSERT INTO cursos (
+                    codigo, nombre, comision, moneda, activo,
+                    creado_en, actualizado_en
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                [
+                    (
+                        codigo,
+                        datos["nombre"],
+                        float(datos["monto"]),
+                        datos["moneda"],
+                        ahora,
+                        ahora,
+                    )
+                    for codigo, datos in CURSOS_INICIALES.items()
+                ],
+            )
+
+        cantidad_sedes = conn.execute("SELECT COUNT(*) FROM sedes").fetchone()[0]
+        if cantidad_sedes == 0:
+            conn.executemany(
+                "INSERT INTO sedes (nombre, activo, creado_en) VALUES (?, 1, ?)",
+                [(nombre, ahora) for nombre in SEDES_INICIALES],
+            )
+
+        cantidad_bancos = conn.execute("SELECT COUNT(*) FROM bancos").fetchone()[0]
+        if cantidad_bancos == 0:
+            conn.executemany(
+                "INSERT INTO bancos (nombre, activo, creado_en) VALUES (?, 1, ?)",
+                [(nombre, ahora) for nombre in BANCOS_INICIALES],
+            )
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO configuracion (clave, valor, actualizado_en)
+            VALUES ('tipo_cambio_usd_bs', ?, ?)
+            """,
+            (str(TIPO_CAMBIO_INICIAL), ahora),
+        )
         conn.commit()
 
+
+
+def cargar_cursos(solo_activos=False):
+    consulta = """
+        SELECT codigo, nombre, comision, moneda, activo,
+               creado_en, actualizado_en
+        FROM cursos
+    """
+    if solo_activos:
+        consulta += " WHERE activo = 1"
+    consulta += " ORDER BY nombre, codigo"
+
+    with conectar() as conn:
+        return pd.read_sql_query(consulta, conn)
+
+
+def obtener_curso(codigo):
+    with conectar() as conn:
+        fila = conn.execute(
+            """
+            SELECT codigo, nombre, comision, moneda, activo
+            FROM cursos
+            WHERE codigo = ?
+            """,
+            (codigo,),
+        ).fetchone()
+
+    if fila is None:
+        raise KeyError(f"El curso {codigo} no existe.")
+
+    return {
+        "codigo": fila[0],
+        "nombre": fila[1],
+        "monto": float(fila[2]),
+        "moneda": fila[3],
+        "activo": bool(fila[4]),
+    }
+
+
+class CursosDinamicos:
+    """Compatibilidad con la lógica existente, leyendo cursos desde SQLite."""
+
+    def __getitem__(self, codigo):
+        datos = obtener_curso(codigo)
+        return {"monto": datos["monto"], "moneda": datos["moneda"]}
+
+    def keys(self):
+        return cargar_cursos(solo_activos=True)["codigo"].tolist()
+
+    def items(self):
+        cursos = cargar_cursos(solo_activos=False)
+        return [
+            (
+                fila.codigo,
+                {"monto": float(fila.comision), "moneda": fila.moneda},
+            )
+            for fila in cursos.itertuples()
+        ]
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __contains__(self, codigo):
+        try:
+            obtener_curso(codigo)
+            return True
+        except KeyError:
+            return False
+
+
+COMISIONES = CursosDinamicos()
+
+
+def crear_curso(codigo, nombre, comision, moneda, activo=True):
+    codigo = codigo.strip().upper()
+    nombre = nombre.strip()
+
+    if not codigo or not nombre:
+        raise ValueError("El código y el nombre del curso son obligatorios.")
+    if comision < 0:
+        raise ValueError("La comisión no puede ser negativa.")
+    if moneda not in ["USD", "BOB"]:
+        raise ValueError("La moneda debe ser USD o BOB.")
+
+    ahora = datetime.now().isoformat(timespec="seconds")
+    try:
+        with conectar() as conn:
+            conn.execute(
+                """
+                INSERT INTO cursos (
+                    codigo, nombre, comision, moneda, activo,
+                    creado_en, actualizado_en
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    codigo,
+                    nombre,
+                    float(comision),
+                    moneda,
+                    1 if activo else 0,
+                    ahora,
+                    ahora,
+                ),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError as error:
+        raise ValueError("Ya existe un curso con ese código.") from error
+
+
+def actualizar_curso(
+    codigo_actual,
+    nuevo_codigo,
+    nombre,
+    comision,
+    moneda,
+    activo,
+):
+    codigo_actual = codigo_actual.strip().upper()
+    nuevo_codigo = nuevo_codigo.strip().upper()
+    nombre = nombre.strip()
+
+    if not nuevo_codigo or not nombre:
+        raise ValueError("El código y el nombre son obligatorios.")
+    if comision < 0:
+        raise ValueError("La comisión no puede ser negativa.")
+    if moneda not in ["USD", "BOB"]:
+        raise ValueError("La moneda debe ser USD o BOB.")
+
+    ahora = datetime.now().isoformat(timespec="seconds")
+
+    try:
+        with conectar() as conn:
+            conn.execute("BEGIN")
+            if nuevo_codigo != codigo_actual:
+                existe = conn.execute(
+                    "SELECT 1 FROM cursos WHERE codigo = ?",
+                    (nuevo_codigo,),
+                ).fetchone()
+                if existe:
+                    raise ValueError("Ya existe otro curso con ese código.")
+
+                # Se actualiza también el historial para conservar reportes coherentes.
+                conn.execute(
+                    "UPDATE ventas SET curso = ? WHERE curso = ?",
+                    (nuevo_codigo, codigo_actual),
+                )
+
+            conn.execute(
+                """
+                UPDATE cursos
+                SET codigo = ?, nombre = ?, comision = ?, moneda = ?,
+                    activo = ?, actualizado_en = ?
+                WHERE codigo = ?
+                """,
+                (
+                    nuevo_codigo,
+                    nombre,
+                    float(comision),
+                    moneda,
+                    1 if activo else 0,
+                    ahora,
+                    codigo_actual,
+                ),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError as error:
+        raise ValueError("No se pudo actualizar el curso.") from error
+
+
+def cantidad_ventas_curso(codigo):
+    with conectar() as conn:
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM ventas WHERE curso = ?",
+                (codigo,),
+            ).fetchone()[0]
+        )
+
+
+def eliminar_curso(codigo):
+    cantidad = cantidad_ventas_curso(codigo)
+    if cantidad > 0:
+        raise ValueError(
+            f"Este curso tiene {cantidad} venta(s). "
+            "Desactívalo en lugar de eliminarlo."
+        )
+
+    with conectar() as conn:
+        conn.execute("DELETE FROM cursos WHERE codigo = ?", (codigo,))
+        conn.commit()
+
+
+def cargar_catalogo(tabla, solo_activos=False):
+    if tabla not in {"sedes", "bancos"}:
+        raise ValueError("Catálogo no permitido.")
+
+    consulta = f"SELECT id, nombre, activo, creado_en FROM {tabla}"
+    if solo_activos:
+        consulta += " WHERE activo = 1"
+    consulta += " ORDER BY nombre"
+
+    with conectar() as conn:
+        return pd.read_sql_query(consulta, conn)
+
+
+def crear_elemento_catalogo(tabla, nombre):
+    if tabla not in {"sedes", "bancos"}:
+        raise ValueError("Catálogo no permitido.")
+
+    nombre = nombre.strip()
+    if not nombre:
+        raise ValueError("El nombre es obligatorio.")
+
+    try:
+        with conectar() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO {tabla} (nombre, activo, creado_en)
+                VALUES (?, 1, ?)
+                """,
+                (nombre, datetime.now().isoformat(timespec="seconds")),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError as error:
+        raise ValueError("Ese nombre ya existe.") from error
+
+
+def actualizar_elemento_catalogo(tabla, id_elemento, nombre, activo):
+    if tabla not in {"sedes", "bancos"}:
+        raise ValueError("Catálogo no permitido.")
+
+    nombre = nombre.strip()
+    if not nombre:
+        raise ValueError("El nombre es obligatorio.")
+
+    try:
+        with conectar() as conn:
+            conn.execute(
+                f"UPDATE {tabla} SET nombre = ?, activo = ? WHERE id = ?",
+                (nombre, 1 if activo else 0, int(id_elemento)),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError as error:
+        raise ValueError("Ese nombre ya existe.") from error
+
+
+def eliminar_elemento_catalogo(tabla, id_elemento):
+    if tabla not in {"sedes", "bancos"}:
+        raise ValueError("Catálogo no permitido.")
+
+    with conectar() as conn:
+        fila = conn.execute(
+            f"SELECT nombre FROM {tabla} WHERE id = ?",
+            (int(id_elemento),),
+        ).fetchone()
+
+        if fila is None:
+            raise ValueError("El elemento seleccionado ya no existe.")
+
+        nombre = fila[0]
+        columna_venta = "sede" if tabla == "sedes" else "banco"
+        cantidad = conn.execute(
+            f"SELECT COUNT(*) FROM ventas WHERE {columna_venta} = ?",
+            (nombre,),
+        ).fetchone()[0]
+
+        if cantidad > 0:
+            raise ValueError(
+                f"Este elemento aparece en {cantidad} venta(s). "
+                "Desactívalo en lugar de eliminarlo."
+            )
+
+        conn.execute(f"DELETE FROM {tabla} WHERE id = ?", (int(id_elemento),))
+        conn.commit()
+
+
+def obtener_tipo_cambio():
+    with conectar() as conn:
+        fila = conn.execute(
+            """
+            SELECT valor FROM configuracion
+            WHERE clave = 'tipo_cambio_usd_bs'
+            """
+        ).fetchone()
+
+    return float(fila[0]) if fila else float(TIPO_CAMBIO_INICIAL)
+
+
+def guardar_tipo_cambio(valor):
+    if valor <= 0:
+        raise ValueError("El tipo de cambio debe ser mayor que cero.")
+
+    with conectar() as conn:
+        conn.execute(
+            """
+            INSERT INTO configuracion (clave, valor, actualizado_en)
+            VALUES ('tipo_cambio_usd_bs', ?, ?)
+            ON CONFLICT(clave) DO UPDATE SET
+                valor = excluded.valor,
+                actualizado_en = excluded.actualizado_en
+            """,
+            (
+                str(float(valor)),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+
+
+def etiqueta_curso(codigo):
+    try:
+        datos = obtener_curso(codigo)
+        if datos["nombre"] and datos["nombre"] != codigo:
+            return f"{codigo} · {datos['nombre']}"
+    except KeyError:
+        pass
+    return codigo
+
+
+def codigo_desde_etiqueta(etiqueta):
+    return etiqueta.split(" · ", 1)[0].strip()
 
 def crear_hash_password(password, salt_hex=None):
     if salt_hex is None:
@@ -1064,10 +1469,19 @@ def generar_reporte_excel(df):
         resumen_diario.to_excel(writer, sheet_name="Resumen diario", index=False)
         resumen_mensual.to_excel(writer, sheet_name="Resumen mensual", index=False)
 
-        for curso in COMISIONES:
+        nombres_hojas = set(writer.book.sheetnames)
+        for curso in sorted(ventas["Curso"].dropna().astype(str).unique()):
+            nombre_hoja = re.sub(r'[\\/*?:\[\]]', '_', curso)[:31] or "Curso"
+            base_hoja = nombre_hoja
+            contador = 2
+            while nombre_hoja in nombres_hojas:
+                sufijo = f"_{contador}"
+                nombre_hoja = f"{base_hoja[:31-len(sufijo)]}{sufijo}"
+                contador += 1
+            nombres_hojas.add(nombre_hoja)
             ventas[ventas["Curso"] == curso].to_excel(
                 writer,
-                sheet_name=curso,
+                sheet_name=nombre_hoja,
                 index=False,
             )
 
@@ -1153,6 +1567,10 @@ def generar_reporte_excel(df):
 
 crear_base_datos()
 asegurar_administrador_inicial()
+
+TIPO_CAMBIO_USD_BS = obtener_tipo_cambio()
+SEDES = cargar_catalogo("sedes", solo_activos=True)["nombre"].tolist()
+BANCOS = cargar_catalogo("bancos", solo_activos=True)["nombre"].tolist()
 
 if "usuario_actual" not in st.session_state:
     st.session_state.usuario_actual = None
@@ -1333,7 +1751,11 @@ if seccion == "Registrar venta":
 
         with c1:
             fecha = st.date_input("Fecha de la venta", value=date.today())
-            curso = st.selectbox("Curso", list(COMISIONES.keys()))
+            opciones_cursos = [
+                etiqueta_curso(codigo) for codigo in COMISIONES.keys()
+            ]
+            curso_etiqueta = st.selectbox("Curso", opciones_cursos)
+            curso = codigo_desde_etiqueta(curso_etiqueta)
             monto = st.number_input(
                 "Monto de la venta (Bs)",
                 min_value=0.01,
@@ -1365,18 +1787,7 @@ if seccion == "Registrar venta":
             )
             banco = st.selectbox(
                 "Banco o medio de pago",
-                [
-                    "Banco Nacional de Bolivia (BNB)",
-                    "Banco Mercantil Santa Cruz",
-                    "Banco de Crédito BCP",
-                    "Banco Bisa",
-                    "Banco Unión",
-                    "Banco Económico",
-                    "Banco Ganadero",
-                    "QR",
-                    "Efectivo",
-                    "Otro",
-                ],
+                BANCOS,
             )
 
         st.write("#### Información del pago")
@@ -1846,11 +2257,21 @@ elif seccion == "Editar o eliminar":
 
         with c1:
             fecha = st.date_input("Fecha", value=registro["fecha"].date())
-            curso = st.selectbox(
+            codigos_activos = list(COMISIONES.keys())
+            curso_actual = str(registro["curso"])
+            codigos_edicion = codigos_activos.copy()
+            if curso_actual not in codigos_edicion:
+                codigos_edicion.append(curso_actual)
+            etiquetas_edicion = [
+                etiqueta_curso(codigo) for codigo in codigos_edicion
+            ]
+            etiqueta_actual = etiqueta_curso(curso_actual)
+            curso_etiqueta = st.selectbox(
                 "Curso",
-                list(COMISIONES.keys()),
-                index=list(COMISIONES.keys()).index(registro["curso"]),
+                etiquetas_edicion,
+                index=etiquetas_edicion.index(etiqueta_actual),
             )
+            curso = codigo_desde_etiqueta(curso_etiqueta)
             monto = st.number_input(
                 "Monto",
                 min_value=0.01,
@@ -2104,33 +2525,339 @@ elif seccion == "Usuarios":
 
 
 elif seccion == "Configuración":
-    st.markdown('<div class="jet-section-title">Configuración del sistema</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="jet-section-title">Configuración del sistema</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Los cambios realizados aquí se guardan en la base de datos y se "
+        "aplican automáticamente en todo el sistema."
+    )
 
-    st.write(f"**Tipo de cambio predeterminado:** {TIPO_CAMBIO_USD_BS}")
+    tab_cursos, tab_sedes, tab_bancos, tab_cambio = st.tabs(
+        ["📚 Cursos", "🏢 Sedes", "🏦 Bancos", "💱 Tipo de cambio"]
+    )
 
-    tabla_comisiones = pd.DataFrame(
-        [
-            {
-                "Curso": curso,
-                "Comisión": datos["monto"],
-                "Moneda": datos["moneda"],
-                "Comisión estimada en Bs": (
-                    datos["monto"] * TIPO_CAMBIO_USD_BS
-                    if datos["moneda"] == "USD"
-                    else datos["monto"]
-                ),
+    # --------------------------------------------------------
+    # CURSOS
+    # --------------------------------------------------------
+    with tab_cursos:
+        st.write("### Cursos y comisiones")
+        cursos_df = cargar_cursos(solo_activos=False)
+
+        vista_cursos = cursos_df.copy()
+        if not vista_cursos.empty:
+            vista_cursos["Estado"] = vista_cursos["activo"].map(
+                {1: "Activo", 0: "Inactivo"}
+            )
+            vista_cursos["Ventas"] = vista_cursos["codigo"].apply(
+                cantidad_ventas_curso
+            )
+            vista_cursos = vista_cursos.rename(
+                columns={
+                    "codigo": "Código",
+                    "nombre": "Nombre",
+                    "comision": "Comisión",
+                    "moneda": "Moneda",
+                }
+            )[["Código", "Nombre", "Comisión", "Moneda", "Estado", "Ventas"]]
+            st.dataframe(
+                vista_cursos,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Comisión": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+
+        sub_nuevo, sub_editar = st.tabs(
+            ["➕ Crear curso", "✏️ Editar, desactivar o eliminar"]
+        )
+
+        with sub_nuevo:
+            with st.form("crear_curso_form", clear_on_submit=True):
+                n1, n2 = st.columns(2)
+                with n1:
+                    nuevo_codigo = st.text_input(
+                        "Código del curso",
+                        placeholder="Ej.: PCA",
+                    )
+                    nueva_comision = st.number_input(
+                        "Comisión",
+                        min_value=0.0,
+                        value=0.0,
+                        step=10.0,
+                    )
+                with n2:
+                    nuevo_nombre = st.text_input(
+                        "Nombre del curso",
+                        placeholder="Ej.: Piloto Comercial Avanzado",
+                    )
+                    nueva_moneda = st.selectbox("Moneda", ["USD", "BOB"])
+
+                nuevo_activo = st.checkbox("Curso activo", value=True)
+                crear_curso_btn = st.form_submit_button(
+                    "Crear curso",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+                if crear_curso_btn:
+                    try:
+                        crear_curso(
+                            nuevo_codigo,
+                            nuevo_nombre,
+                            nueva_comision,
+                            nueva_moneda,
+                            nuevo_activo,
+                        )
+                        st.success("Curso creado correctamente.")
+                        st.rerun()
+                    except ValueError as error:
+                        st.error(str(error))
+
+        with sub_editar:
+            cursos_df = cargar_cursos(solo_activos=False)
+            if cursos_df.empty:
+                st.info("No hay cursos para editar.")
+            else:
+                opciones = {
+                    f"{fila.codigo} · {fila.nombre}": fila.codigo
+                    for fila in cursos_df.itertuples()
+                }
+                seleccion_curso = st.selectbox(
+                    "Selecciona un curso",
+                    list(opciones.keys()),
+                    key="curso_config_seleccion",
+                )
+                codigo_actual = opciones[seleccion_curso]
+                fila = cursos_df[
+                    cursos_df["codigo"] == codigo_actual
+                ].iloc[0]
+
+                with st.form("editar_curso_form"):
+                    e1, e2 = st.columns(2)
+                    with e1:
+                        codigo_editado = st.text_input(
+                            "Código",
+                            value=str(fila["codigo"]),
+                        )
+                        comision_editada = st.number_input(
+                            "Comisión",
+                            min_value=0.0,
+                            value=float(fila["comision"]),
+                            step=10.0,
+                        )
+                    with e2:
+                        nombre_editado = st.text_input(
+                            "Nombre",
+                            value=str(fila["nombre"]),
+                        )
+                        moneda_editada = st.selectbox(
+                            "Moneda",
+                            ["USD", "BOB"],
+                            index=0 if fila["moneda"] == "USD" else 1,
+                        )
+
+                    activo_editado = st.checkbox(
+                        "Curso activo",
+                        value=bool(fila["activo"]),
+                    )
+                    guardar_curso_btn = st.form_submit_button(
+                        "Guardar cambios",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                    if guardar_curso_btn:
+                        try:
+                            actualizar_curso(
+                                codigo_actual,
+                                codigo_editado,
+                                nombre_editado,
+                                comision_editada,
+                                moneda_editada,
+                                activo_editado,
+                            )
+                            st.success("Curso actualizado correctamente.")
+                            st.rerun()
+                        except ValueError as error:
+                            st.error(str(error))
+
+                ventas_asociadas = cantidad_ventas_curso(codigo_actual)
+                if ventas_asociadas:
+                    st.info(
+                        f"Este curso tiene {ventas_asociadas} venta(s). "
+                        "No puede eliminarse, pero sí desactivarse."
+                    )
+                confirmar_eliminar_curso = st.checkbox(
+                    "Confirmo que deseo eliminar este curso",
+                    key="confirmar_eliminar_curso",
+                    disabled=ventas_asociadas > 0,
+                )
+                if st.button(
+                    "Eliminar curso",
+                    disabled=(
+                        ventas_asociadas > 0
+                        or not confirmar_eliminar_curso
+                    ),
+                    use_container_width=True,
+                ):
+                    try:
+                        eliminar_curso(codigo_actual)
+                        st.success("Curso eliminado correctamente.")
+                        st.rerun()
+                    except ValueError as error:
+                        st.error(str(error))
+
+    # --------------------------------------------------------
+    # CATÁLOGOS: SEDES Y BANCOS
+    # --------------------------------------------------------
+    def mostrar_gestion_catalogo(tabla, singular):
+        df_catalogo = cargar_catalogo(tabla, solo_activos=False)
+        vista = df_catalogo.copy()
+        if not vista.empty:
+            vista["Estado"] = vista["activo"].map(
+                {1: "Activo", 0: "Inactivo"}
+            )
+            vista = vista.rename(
+                columns={"id": "ID", "nombre": "Nombre"}
+            )[["ID", "Nombre", "Estado"]]
+            st.dataframe(vista, use_container_width=True, hide_index=True)
+
+        with st.form(f"crear_{tabla}_form", clear_on_submit=True):
+            nombre_nuevo = st.text_input(
+                f"Nombre de la nueva {singular.lower()}",
+                key=f"nuevo_{tabla}",
+            )
+            crear_btn = st.form_submit_button(
+                f"Agregar {singular.lower()}",
+                type="primary",
+                use_container_width=True,
+            )
+            if crear_btn:
+                try:
+                    crear_elemento_catalogo(tabla, nombre_nuevo)
+                    st.success(f"{singular} agregada correctamente.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+
+        df_catalogo = cargar_catalogo(tabla, solo_activos=False)
+        if not df_catalogo.empty:
+            mapa = {
+                f"{fila.nombre} · {'Activo' if fila.activo else 'Inactivo'}":
+                int(fila.id)
+                for fila in df_catalogo.itertuples()
             }
-            for curso, datos in COMISIONES.items()
-        ]
-    )
+            seleccionado = st.selectbox(
+                f"Selecciona una {singular.lower()} para editar",
+                list(mapa.keys()),
+                key=f"seleccion_{tabla}",
+            )
+            id_elemento = mapa[seleccionado]
+            fila = df_catalogo[df_catalogo["id"] == id_elemento].iloc[0]
 
-    st.dataframe(tabla_comisiones, use_container_width=True, hide_index=True)
+            with st.form(f"editar_{tabla}_form"):
+                nombre_editado = st.text_input(
+                    "Nombre",
+                    value=str(fila["nombre"]),
+                    key=f"nombre_editar_{tabla}",
+                )
+                activo_editado = st.checkbox(
+                    "Activo",
+                    value=bool(fila["activo"]),
+                    key=f"activo_editar_{tabla}",
+                )
+                guardar_btn = st.form_submit_button(
+                    "Guardar cambios",
+                    type="primary",
+                    use_container_width=True,
+                )
+                if guardar_btn:
+                    try:
+                        actualizar_elemento_catalogo(
+                            tabla,
+                            id_elemento,
+                            nombre_editado,
+                            activo_editado,
+                        )
+                        st.success("Cambios guardados correctamente.")
+                        st.rerun()
+                    except ValueError as error:
+                        st.error(str(error))
 
-    st.info(
-        "Para cambiar permanentemente cursos, comisiones, vendedores o el tipo "
-        "de cambio predeterminado, edita la sección CONFIGURACIÓN al inicio de app.py."
-    )
+            confirmar = st.checkbox(
+                f"Confirmo que deseo eliminar esta {singular.lower()}",
+                key=f"confirmar_eliminar_{tabla}",
+            )
+            if st.button(
+                f"Eliminar {singular.lower()}",
+                disabled=not confirmar,
+                key=f"eliminar_{tabla}",
+                use_container_width=True,
+            ):
+                try:
+                    eliminar_elemento_catalogo(tabla, id_elemento)
+                    st.success(f"{singular} eliminada correctamente.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+
+    with tab_sedes:
+        st.write("### Gestión de sedes")
+        st.caption(
+            "Las sedes inactivas dejan de aparecer en nuevas ventas, "
+            "pero permanecen en el historial."
+        )
+        mostrar_gestion_catalogo("sedes", "Sede")
+
+    with tab_bancos:
+        st.write("### Gestión de bancos y medios de pago")
+        st.caption(
+            "Los elementos inactivos dejan de aparecer en el formulario "
+            "de nuevas ventas."
+        )
+        mostrar_gestion_catalogo("bancos", "Opción")
+
+    # --------------------------------------------------------
+    # TIPO DE CAMBIO
+    # --------------------------------------------------------
+    with tab_cambio:
+        st.write("### Tipo de cambio predeterminado")
+        st.caption(
+            "Este valor aparecerá automáticamente al registrar o importar "
+            "nuevas ventas. Cada venta conserva el tipo de cambio utilizado."
+        )
+
+        with st.form("tipo_cambio_form"):
+            nuevo_tipo_cambio = st.number_input(
+                "USD/BOB",
+                min_value=0.01,
+                value=float(obtener_tipo_cambio()),
+                step=0.01,
+                format="%.2f",
+            )
+            guardar_cambio_btn = st.form_submit_button(
+                "Actualizar tipo de cambio",
+                type="primary",
+                use_container_width=True,
+            )
+
+            if guardar_cambio_btn:
+                try:
+                    guardar_tipo_cambio(nuevo_tipo_cambio)
+                    st.success("Tipo de cambio actualizado correctamente.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+
+        st.warning(
+            "Los cambios de comisión y tipo de cambio se aplican a ventas "
+            "nuevas. Las ventas anteriores conservan sus valores históricos."
+        )
 
     st.warning(
-        "El acceso inicial es admin / Admin123!. Cambia esa contraseña desde Usuarios."
+        "El acceso inicial es admin / Admin123!. "
+        "Cambia esa contraseña desde Usuarios."
     )
