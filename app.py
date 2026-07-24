@@ -588,6 +588,49 @@ def crear_base_datos():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alumnos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                codigo TEXT NOT NULL UNIQUE,
+                nombre_completo TEXT NOT NULL,
+                documento TEXT NOT NULL,
+                telefono TEXT NOT NULL,
+                correo TEXT,
+                numero_transaccion TEXT NOT NULL,
+                venta_id INTEGER,
+                curso TEXT,
+                sede TEXT,
+                monto_reportado REAL,
+                estado TEXT NOT NULL DEFAULT 'Pendiente',
+                observacion TEXT,
+                registrado_en TEXT NOT NULL,
+                revisado_por TEXT,
+                revisado_en TEXT,
+                FOREIGN KEY (venta_id) REFERENCES ventas(id)
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_alumnos_transaccion
+            ON alumnos(numero_transaccion)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auditoria_datos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT NOT NULL,
+                accion TEXT NOT NULL,
+                detalle TEXT,
+                creado_en TEXT NOT NULL
+            )
+            """
+        )
+
         ahora = datetime.now().isoformat(timespec="seconds")
 
         cantidad_cursos = conn.execute("SELECT COUNT(*) FROM cursos").fetchone()[0]
@@ -1222,10 +1265,134 @@ def actualizar_venta(id_venta, fecha, curso, monto, cliente, vendedor, sede, tip
         conn.commit()
 
 
-def eliminar_venta(id_venta):
+def registrar_auditoria(usuario, accion, detalle=""):
     with conectar() as conn:
-        conn.execute("DELETE FROM ventas WHERE id = ?", (int(id_venta),))
+        conn.execute(
+            """
+            INSERT INTO auditoria_datos (usuario, accion, detalle, creado_en)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                usuario,
+                accion,
+                detalle,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
         conn.commit()
+
+
+def eliminar_venta(id_venta, usuario="sistema"):
+    id_venta = int(id_venta)
+    with conectar() as conn:
+        fila = conn.execute(
+            "SELECT cliente, numero_transaccion FROM ventas WHERE id = ?",
+            (id_venta,),
+        ).fetchone()
+        if fila is None:
+            raise ValueError("La venta seleccionada ya no existe.")
+
+        # Conserva el registro del alumno, pero desvincula la venta eliminada.
+        conn.execute(
+            """
+            UPDATE alumnos
+            SET venta_id = NULL,
+                estado = 'Con observación',
+                observacion = CASE
+                    WHEN TRIM(COALESCE(observacion, '')) = ''
+                    THEN 'La venta vinculada fue eliminada por administración.'
+                    ELSE observacion || ' | La venta vinculada fue eliminada por administración.'
+                END
+            WHERE venta_id = ?
+            """,
+            (id_venta,),
+        )
+        conn.execute("DELETE FROM ventas WHERE id = ?", (id_venta,))
+        conn.execute(
+            """
+            INSERT INTO auditoria_datos (usuario, accion, detalle, creado_en)
+            VALUES (?, 'ELIMINAR_VENTA', ?, ?)
+            """,
+            (
+                usuario,
+                f"Venta ID {id_venta}; cliente={fila[0]}; transacción={fila[1] or '-'}",
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+
+
+def obtener_conteos_limpieza():
+    with conectar() as conn:
+        ventas = int(conn.execute("SELECT COUNT(*) FROM ventas").fetchone()[0])
+        alumnos = int(conn.execute("SELECT COUNT(*) FROM alumnos").fetchone()[0])
+    return ventas, alumnos
+
+
+def limpiar_datos_operativos(eliminar_ventas, eliminar_alumnos, usuario):
+    if not eliminar_ventas and not eliminar_alumnos:
+        raise ValueError("Selecciona al menos un tipo de información para limpiar.")
+
+    with conectar() as conn:
+        conn.execute("BEGIN")
+        ventas_antes = int(conn.execute("SELECT COUNT(*) FROM ventas").fetchone()[0])
+        alumnos_antes = int(conn.execute("SELECT COUNT(*) FROM alumnos").fetchone()[0])
+
+        # Si se eliminan ventas pero se conservan alumnos, los alumnos quedan observados.
+        if eliminar_ventas and not eliminar_alumnos:
+            conn.execute(
+                """
+                UPDATE alumnos
+                SET venta_id = NULL,
+                    estado = 'Con observación',
+                    observacion = CASE
+                        WHEN TRIM(COALESCE(observacion, '')) = ''
+                        THEN 'Las ventas fueron limpiadas por administración.'
+                        ELSE observacion || ' | Las ventas fueron limpiadas por administración.'
+                    END
+                WHERE venta_id IS NOT NULL
+                """
+            )
+
+        if eliminar_alumnos:
+            conn.execute("DELETE FROM alumnos")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name = 'alumnos'")
+
+        if eliminar_ventas:
+            conn.execute("DELETE FROM ventas")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name = 'ventas'")
+
+        detalle = (
+            f"Ventas eliminadas={ventas_antes if eliminar_ventas else 0}; "
+            f"alumnos eliminados={alumnos_antes if eliminar_alumnos else 0}"
+        )
+        conn.execute(
+            """
+            INSERT INTO auditoria_datos (usuario, accion, detalle, creado_en)
+            VALUES (?, 'LIMPIEZA_DATOS', ?, ?)
+            """,
+            (usuario, detalle, datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+
+    return (
+        ventas_antes if eliminar_ventas else 0,
+        alumnos_antes if eliminar_alumnos else 0,
+    )
+
+
+def cargar_auditoria(limite=50):
+    with conectar() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT usuario, accion, detalle, creado_en
+            FROM auditoria_datos
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            conn,
+            params=(int(limite),),
+        )
 
 
 def importar_dataframe(df, tipo_cambio):
@@ -1313,6 +1480,189 @@ def importar_dataframe(df, tipo_cambio):
             conn.commit()
 
     return len(validos), errores
+
+
+# ============================================================
+# REGISTRO Y CONTROL DE ALUMNOS
+# ============================================================
+
+def normalizar_transaccion(valor):
+    return re.sub(r"\s+", "", (valor or "").strip()).lower()
+
+
+def buscar_venta_por_transaccion(numero_transaccion):
+    numero = (numero_transaccion or "").strip()
+    if not numero:
+        return None
+
+    with conectar() as conn:
+        fila = conn.execute(
+            """
+            SELECT id, cliente, curso, sede, monto, vendedor, banco,
+                   fecha_hora_pago, estado_pago, numero_transaccion
+            FROM ventas
+            WHERE LOWER(REPLACE(TRIM(numero_transaccion), ' ', '')) = ?
+            LIMIT 1
+            """,
+            (normalizar_transaccion(numero),),
+        ).fetchone()
+
+    if fila is None:
+        return None
+
+    columnas = [
+        "id", "cliente", "curso", "sede", "monto", "vendedor", "banco",
+        "fecha_hora_pago", "estado_pago", "numero_transaccion",
+    ]
+    return dict(zip(columnas, fila))
+
+
+def codigo_alumno_nuevo():
+    prefijo = f"JAA-{datetime.now().year}-"
+    with conectar() as conn:
+        ultimo = conn.execute(
+            "SELECT MAX(id) FROM alumnos"
+        ).fetchone()[0] or 0
+    return f"{prefijo}{ultimo + 1:05d}"
+
+
+def alumno_ya_registrado(numero_transaccion, documento):
+    with conectar() as conn:
+        fila = conn.execute(
+            """
+            SELECT codigo
+            FROM alumnos
+            WHERE LOWER(REPLACE(TRIM(numero_transaccion), ' ', '')) = ?
+               OR LOWER(TRIM(documento)) = LOWER(TRIM(?))
+            LIMIT 1
+            """,
+            (normalizar_transaccion(numero_transaccion), documento.strip()),
+        ).fetchone()
+    return fila[0] if fila else None
+
+
+def guardar_alumno(
+    nombre_completo, documento, telefono, correo, numero_transaccion,
+    curso_manual=None, sede_manual=None, monto_reportado=None,
+):
+    nombre_completo = nombre_completo.strip()
+    documento = documento.strip()
+    telefono = telefono.strip()
+    correo = correo.strip()
+    numero_transaccion = numero_transaccion.strip()
+
+    if not nombre_completo or not documento or not telefono or not numero_transaccion:
+        raise ValueError(
+            "Nombre completo, documento, teléfono y número de transacción son obligatorios."
+        )
+
+    existente = alumno_ya_registrado(numero_transaccion, documento)
+    if existente:
+        raise ValueError(
+            f"Ya existe un registro relacionado con estos datos: {existente}."
+        )
+
+    venta = buscar_venta_por_transaccion(numero_transaccion)
+    if venta:
+        venta_id = int(venta["id"])
+        curso = venta["curso"]
+        sede = venta["sede"]
+        monto = float(venta["monto"])
+        estado = "Validado"
+        observacion = "Venta encontrada automáticamente por número de transacción."
+    else:
+        venta_id = None
+        curso = (curso_manual or "").strip()
+        sede = (sede_manual or "").strip()
+        monto = float(monto_reportado or 0)
+        estado = "Con observación"
+        observacion = "No se encontró una venta registrada con este número de transacción."
+
+    codigo = codigo_alumno_nuevo()
+    with conectar() as conn:
+        conn.execute(
+            """
+            INSERT INTO alumnos (
+                codigo, nombre_completo, documento, telefono, correo,
+                numero_transaccion, venta_id, curso, sede, monto_reportado,
+                estado, observacion, registrado_en
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                codigo, nombre_completo, documento, telefono, correo,
+                numero_transaccion, venta_id, curso, sede, monto, estado,
+                observacion, datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+    return codigo, estado, venta
+
+
+def cargar_alumnos():
+    with conectar() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT a.*, v.cliente AS cliente_venta, v.vendedor, v.banco,
+                   v.estado_pago, v.monto AS monto_venta
+            FROM alumnos a
+            LEFT JOIN ventas v ON v.id = a.venta_id
+            ORDER BY a.registrado_en DESC, a.id DESC
+            """,
+            conn,
+        )
+
+
+def actualizar_estado_alumno(id_alumno, estado, observacion, revisado_por):
+    estados_validos = {"Pendiente", "Validado", "Con observación", "Rechazado"}
+    if estado not in estados_validos:
+        raise ValueError("Estado de alumno no válido.")
+
+    with conectar() as conn:
+        conn.execute(
+            """
+            UPDATE alumnos
+            SET estado = ?, observacion = ?, revisado_por = ?, revisado_en = ?
+            WHERE id = ?
+            """,
+            (
+                estado, observacion.strip(), revisado_por,
+                datetime.now().isoformat(timespec="seconds"), int(id_alumno),
+            ),
+        )
+        conn.commit()
+
+
+def intentar_vincular_alumno(id_alumno, revisado_por):
+    with conectar() as conn:
+        fila = conn.execute(
+            "SELECT numero_transaccion FROM alumnos WHERE id = ?",
+            (int(id_alumno),),
+        ).fetchone()
+    if fila is None:
+        raise ValueError("El alumno seleccionado ya no existe.")
+
+    venta = buscar_venta_por_transaccion(fila[0])
+    if venta is None:
+        raise ValueError("Todavía no existe una venta con esa transacción.")
+
+    with conectar() as conn:
+        conn.execute(
+            """
+            UPDATE alumnos
+            SET venta_id = ?, curso = ?, sede = ?, monto_reportado = ?,
+                estado = 'Validado',
+                observacion = 'Venta vinculada posteriormente por administración.',
+                revisado_por = ?, revisado_en = ?
+            WHERE id = ?
+            """,
+            (
+                int(venta["id"]), venta["curso"], venta["sede"],
+                float(venta["monto"]), revisado_por,
+                datetime.now().isoformat(timespec="seconds"), int(id_alumno),
+            ),
+        )
+        conn.commit()
 
 
 # ============================================================
@@ -1581,6 +1931,116 @@ def cerrar_sesion():
     st.rerun()
 
 
+# Enlace público: agrega ?registro=alumno al URL de la aplicación.
+modo_registro_alumno = st.query_params.get("registro") == "alumno"
+
+if modo_registro_alumno:
+    st.markdown(
+        """
+        <div class="jet-hero">
+            <div class="jet-kicker">Registro oficial de estudiantes</div>
+            <div class="jet-hero-title">Confirma tu inscripción</div>
+            <p class="jet-hero-copy">
+                Después de realizar tu pago, completa este formulario.
+                Tu información será comparada con la venta registrada por la academia.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        "Ten a mano el número de transacción de tu pago. "
+        "No necesitas crear una cuenta ni iniciar sesión."
+    )
+
+    numero_publico = st.text_input(
+        "Número de transacción",
+        placeholder="Ej.: 45893271 o TRX-45893271",
+        key="transaccion_alumno_publica",
+    )
+
+    if numero_publico.strip():
+        venta_publica = buscar_venta_por_transaccion(numero_publico)
+        if venta_publica:
+            st.success("Venta encontrada en el sistema.")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Curso", venta_publica["curso"] or "-")
+            d2.metric("Sede", venta_publica["sede"] or "-")
+            d3.metric("Monto", f"Bs {float(venta_publica['monto']):,.2f}")
+            st.caption(
+                f"Vendedor registrado: {venta_publica['vendedor'] or '-'} · "
+                f"Estado del pago: {venta_publica['estado_pago'] or 'Pendiente'}"
+            )
+        else:
+            st.warning(
+                "No encontramos esa transacción. Puedes registrarte igualmente; "
+                "tu solicitud quedará con observación para que administración la revise."
+            )
+
+        with st.form("registro_publico_alumno", clear_on_submit=False):
+            a1, a2 = st.columns(2)
+            with a1:
+                nombre_alumno = st.text_input("Nombre completo")
+                documento_alumno = st.text_input("CI o pasaporte")
+                telefono_alumno = st.text_input("Celular / WhatsApp")
+            with a2:
+                correo_alumno = st.text_input("Correo electrónico (opcional)")
+                if venta_publica:
+                    curso_alumno = venta_publica["curso"]
+                    sede_alumno = venta_publica["sede"]
+                    monto_alumno = float(venta_publica["monto"])
+                    st.text_input("Curso", value=curso_alumno or "", disabled=True)
+                    st.text_input("Sede", value=sede_alumno or "", disabled=True)
+                else:
+                    opciones_publicas = [etiqueta_curso(c) for c in COMISIONES.keys()]
+                    curso_publico = st.selectbox("Curso pagado", opciones_publicas)
+                    curso_alumno = codigo_desde_etiqueta(curso_publico)
+                    sede_alumno = st.selectbox("Sede", SEDES)
+                    monto_alumno = st.number_input(
+                        "Monto pagado (Bs)", min_value=0.0, value=0.0, step=10.0
+                    )
+
+            aceptar = st.checkbox(
+                "Confirmo que los datos ingresados son correctos y autorizo su revisión."
+            )
+            enviar_alumno = st.form_submit_button(
+                "Enviar registro de inscripción",
+                type="primary",
+                use_container_width=True,
+            )
+
+            if enviar_alumno:
+                if not aceptar:
+                    st.error("Debes confirmar que los datos son correctos.")
+                else:
+                    try:
+                        codigo, estado, _ = guardar_alumno(
+                            nombre_alumno, documento_alumno, telefono_alumno,
+                            correo_alumno, numero_publico, curso_alumno,
+                            sede_alumno, monto_alumno,
+                        )
+                        st.success(
+                            f"Registro enviado correctamente. Tu código es {codigo}."
+                        )
+                        if estado == "Validado":
+                            st.success("Tu inscripción quedó validada automáticamente.")
+                        else:
+                            st.warning(
+                                "Tu registro quedó con observación. Administración "
+                                "revisará el pago y la transacción."
+                            )
+                    except ValueError as error:
+                        st.error(str(error))
+
+    st.divider()
+    st.caption("Jet Airways Academy · Registro seguro de estudiantes")
+    if st.button("Ir al acceso del personal"):
+        st.query_params.clear()
+        st.rerun()
+    st.stop()
+
+
 if st.session_state.usuario_actual is None:
     izquierda, centro, derecha = st.columns([1, 1.05, 1])
 
@@ -1698,8 +2158,10 @@ with st.sidebar:
         "Registrar venta": "✦  Registrar venta",
         "Dashboard": "◈  Dashboard ejecutivo",
         "Consultar ventas": "⌕  Consultar ventas",
+        "Alumnos": "🎓  Control de alumnos",
         "Exportar y respaldo": "⇩  Exportar y respaldo",
         "Editar o eliminar": "✎  Editar o eliminar",
+        "Limpieza de datos": "🧹  Limpieza de datos",
         "Importar Excel": "↥  Importar Excel",
         "Usuarios": "◎  Usuarios",
         "Configuración": "⚙  Configuración",
@@ -1708,12 +2170,13 @@ with st.sidebar:
     opciones_internas = ["Registrar venta", "Dashboard", "Consultar ventas"]
 
     if rol_actual in ["Administrador", "Supervisor"]:
-        opciones_internas.append("Exportar y respaldo")
+        opciones_internas.extend(["Alumnos", "Exportar y respaldo"])
 
     if rol_actual == "Administrador":
         opciones_internas.extend(
             [
                 "Editar o eliminar",
+                "Limpieza de datos",
                 "Importar Excel",
                 "Usuarios",
                 "Configuración",
@@ -2330,8 +2793,110 @@ elif seccion == "Editar o eliminar":
         disabled=not confirmar,
         use_container_width=True,
     ):
-        eliminar_venta(id_venta)
-        st.success("Venta eliminada correctamente.")
+        try:
+            eliminar_venta(id_venta, usuario_actual["usuario"])
+            st.success("Venta eliminada correctamente.")
+            st.rerun()
+        except ValueError as error:
+            st.error(str(error))
+
+# ------------------------------------------------------------
+# LIMPIEZA DE DATOS
+# ------------------------------------------------------------
+
+elif seccion == "Limpieza de datos":
+    st.markdown(
+        '<div class="jet-section-title">Limpieza segura de datos</div>',
+        unsafe_allow_html=True,
+    )
+    st.warning(
+        "Esta herramienta es exclusiva para administradores. "
+        "Puede eliminar ventas y registros de alumnos, pero conserva usuarios, "
+        "cursos, bancos, sedes, tipo de cambio y configuración."
+    )
+
+    ventas_actuales, alumnos_actuales = obtener_conteos_limpieza()
+    c1, c2 = st.columns(2)
+    c1.metric("Ventas actuales", ventas_actuales)
+    c2.metric("Alumnos actuales", alumnos_actuales)
+
+    st.write("#### 1. Descarga un respaldo antes de limpiar")
+    st.caption(
+        "El respaldo contiene la base de datos completa, incluidos comprobantes, "
+        "usuarios y configuraciones."
+    )
+    st.download_button(
+        "Descargar respaldo de ventas.db",
+        data=DB_PATH.read_bytes(),
+        file_name=f"ventas_respaldo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
+        mime="application/octet-stream",
+        use_container_width=True,
+    )
+
+    st.divider()
+    st.write("#### 2. Selecciona qué deseas eliminar")
+    limpiar_ventas = st.checkbox(
+        f"Eliminar todas las ventas ({ventas_actuales})",
+        value=True,
+    )
+    limpiar_alumnos = st.checkbox(
+        f"Eliminar todos los alumnos ({alumnos_actuales})",
+        value=True,
+    )
+
+    if limpiar_ventas and not limpiar_alumnos and alumnos_actuales > 0:
+        st.info(
+            "Los alumnos se conservarán, pero quedarán como Con observación "
+            "porque ya no tendrán una venta vinculada."
+        )
+
+    st.write("#### 3. Confirmación de seguridad")
+    st.write(
+        "Para habilitar el botón, escribe exactamente: "
+        "**LIMPIAR DATOS**"
+    )
+    confirmacion_limpieza = st.text_input(
+        "Frase de confirmación",
+        placeholder="LIMPIAR DATOS",
+    )
+    confirmar_limpieza = st.checkbox(
+        "Confirmo que descargué un respaldo y comprendo que esta acción no se puede deshacer."
+    )
+
+    habilitado = (
+        confirmacion_limpieza.strip() == "LIMPIAR DATOS"
+        and confirmar_limpieza
+        and (limpiar_ventas or limpiar_alumnos)
+    )
+
+    if st.button(
+        "Eliminar datos seleccionados",
+        type="primary",
+        disabled=not habilitado,
+        use_container_width=True,
+    ):
+        try:
+            ventas_borradas, alumnos_borrados = limpiar_datos_operativos(
+                limpiar_ventas,
+                limpiar_alumnos,
+                usuario_actual["usuario"],
+            )
+            st.success(
+                f"Limpieza completada: {ventas_borradas} venta(s) y "
+                f"{alumnos_borrados} alumno(s) eliminados. "
+                "La configuración general fue conservada."
+            )
+            st.rerun()
+        except (ValueError, sqlite3.Error) as error:
+            st.error(f"No se pudo completar la limpieza: {error}")
+
+    st.divider()
+    with st.expander("Historial reciente de acciones administrativas"):
+        auditoria = cargar_auditoria()
+        if auditoria.empty:
+            st.info("Todavía no hay acciones registradas.")
+        else:
+            st.dataframe(auditoria, use_container_width=True, hide_index=True)
 
 # ------------------------------------------------------------
 # IMPORTAR
@@ -2421,6 +2986,148 @@ elif seccion == "Exportar y respaldo":
 # ------------------------------------------------------------
 # CONFIGURACIÓN
 # ------------------------------------------------------------
+
+elif seccion == "Alumnos":
+    st.markdown(
+        '<div class="jet-section-title">Control de alumnos e inscripciones</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Compara los registros enviados por alumnos con las ventas del sistema. "
+        "Enlace público: agrega ?registro=alumno al URL de esta aplicación."
+    )
+
+    alumnos_df = cargar_alumnos()
+    ventas_df = cargar_ventas()
+
+    total_ventas = len(ventas_df)
+    total_alumnos = len(alumnos_df)
+    validados = int((alumnos_df["estado"] == "Validado").sum()) if not alumnos_df.empty else 0
+    observados = int((alumnos_df["estado"] == "Con observación").sum()) if not alumnos_df.empty else 0
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Ventas registradas", total_ventas)
+    k2.metric("Alumnos registrados", total_alumnos)
+    k3.metric("Validados", validados)
+    k4.metric("Con observación", observados)
+
+    enlace_base = st.text_input(
+        "Enlace público para compartir",
+        value="Agrega ?registro=alumno al final del enlace de Streamlit",
+        disabled=True,
+    )
+
+    if alumnos_df.empty:
+        st.info("Todavía no hay alumnos registrados mediante el formulario público.")
+    else:
+        f1, f2 = st.columns(2)
+        with f1:
+            filtro_estado = st.selectbox(
+                "Estado",
+                ["Todos", "Pendiente", "Validado", "Con observación", "Rechazado"],
+            )
+        with f2:
+            buscar_alumno = st.text_input(
+                "Buscar por nombre, documento o transacción"
+            )
+
+        vista = alumnos_df.copy()
+        if filtro_estado != "Todos":
+            vista = vista[vista["estado"] == filtro_estado]
+        if buscar_alumno.strip():
+            termino = buscar_alumno.strip()
+            mascara = (
+                vista["nombre_completo"].astype(str).str.contains(termino, case=False, na=False)
+                | vista["documento"].astype(str).str.contains(termino, case=False, na=False)
+                | vista["numero_transaccion"].astype(str).str.contains(termino, case=False, na=False)
+            )
+            vista = vista[mascara]
+
+        tabla_alumnos = vista.rename(columns={
+            "codigo": "Código",
+            "nombre_completo": "Alumno",
+            "documento": "Documento",
+            "telefono": "Teléfono",
+            "correo": "Correo",
+            "numero_transaccion": "N.º transacción",
+            "curso": "Curso",
+            "sede": "Sede",
+            "monto_reportado": "Monto",
+            "estado": "Estado",
+            "observacion": "Observación",
+            "registrado_en": "Registrado",
+            "vendedor": "Vendedor",
+        })
+        columnas = [
+            "Código", "Alumno", "Documento", "Teléfono", "N.º transacción",
+            "Curso", "Sede", "Monto", "Estado", "Vendedor", "Observación",
+            "Registrado",
+        ]
+        st.dataframe(
+            tabla_alumnos[columnas],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Monto": st.column_config.NumberColumn(format="Bs %.2f"),
+            },
+        )
+
+        st.write("### Revisar registro")
+        opciones_alumnos = {
+            f"{fila.codigo} · {fila.nombre_completo} · {fila.estado}": int(fila.id)
+            for fila in alumnos_df.itertuples()
+        }
+        seleccionado = st.selectbox(
+            "Selecciona un alumno",
+            list(opciones_alumnos.keys()),
+            key="alumno_revision",
+        )
+        id_alumno = opciones_alumnos[seleccionado]
+        fila = alumnos_df[alumnos_df["id"] == id_alumno].iloc[0]
+
+        r1, r2 = st.columns(2)
+        with r1:
+            st.write(f"**Alumno:** {fila['nombre_completo']}")
+            st.write(f"**Documento:** {fila['documento']}")
+            st.write(f"**Transacción:** {fila['numero_transaccion']}")
+            st.write(f"**Curso/Sede:** {fila['curso'] or '-'} / {fila['sede'] or '-'}")
+        with r2:
+            st.write(f"**Estado actual:** {fila['estado']}")
+            st.write(f"**Venta vinculada:** {'Sí' if pd.notna(fila['venta_id']) else 'No'}")
+            st.write(f"**Vendedor:** {fila['vendedor'] if pd.notna(fila['vendedor']) else '-'}")
+            st.write(f"**Observación:** {fila['observacion'] or '-'}")
+
+        if pd.isna(fila["venta_id"]):
+            if st.button("Buscar y vincular venta ahora", use_container_width=True):
+                try:
+                    intentar_vincular_alumno(id_alumno, usuario_actual["usuario"])
+                    st.success("Venta vinculada y alumno validado.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+
+        with st.form("actualizar_estado_alumno_form"):
+            estados = ["Pendiente", "Validado", "Con observación", "Rechazado"]
+            estado_nuevo = st.selectbox(
+                "Nuevo estado",
+                estados,
+                index=estados.index(fila["estado"]) if fila["estado"] in estados else 0,
+            )
+            observacion_nueva = st.text_area(
+                "Observación administrativa",
+                value=fila["observacion"] or "",
+            )
+            guardar_revision = st.form_submit_button(
+                "Guardar revisión", type="primary", use_container_width=True
+            )
+            if guardar_revision:
+                actualizar_estado_alumno(
+                    id_alumno, estado_nuevo, observacion_nueva,
+                    usuario_actual["usuario"],
+                )
+                st.success("Revisión guardada correctamente.")
+                st.rerun()
+
 
 elif seccion == "Usuarios":
     st.markdown('<div class="jet-section-title">Administración de usuarios</div>', unsafe_allow_html=True)
