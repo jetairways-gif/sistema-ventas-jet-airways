@@ -5,7 +5,7 @@ import hmac
 import secrets
 import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -510,6 +510,15 @@ def crear_base_datos():
             "comprobante": "BLOB",
             "comprobante_mime": "TEXT",
             "comprobante_nombre": "TEXT",
+            # Modalidad y seguimiento financiero de la venta.
+            "modalidad_pago": "TEXT NOT NULL DEFAULT 'Contado'",
+            "precio_total": "REAL NOT NULL DEFAULT 0",
+            "monto_pagado_acumulado": "REAL NOT NULL DEFAULT 0",
+            "saldo_pendiente": "REAL NOT NULL DEFAULT 0",
+            "numero_cuotas": "INTEGER NOT NULL DEFAULT 1",
+            "cuotas_pagadas": "INTEGER NOT NULL DEFAULT 1",
+            "proxima_fecha_pago": "TEXT",
+            "estado_financiero": "TEXT NOT NULL DEFAULT 'Pagado completo'",
         }
 
         for nombre_columna, tipo_columna in columnas_nuevas.items():
@@ -517,6 +526,28 @@ def crear_base_datos():
                 conn.execute(
                     f"ALTER TABLE ventas ADD COLUMN {nombre_columna} {tipo_columna}"
                 )
+
+        # Compatibilidad con ventas creadas antes de incorporar contado/cuotas.
+        conn.execute(
+            """
+            UPDATE ventas
+            SET modalidad_pago = COALESCE(NULLIF(TRIM(modalidad_pago), ''), 'Contado'),
+                precio_total = CASE WHEN COALESCE(precio_total, 0) <= 0 THEN monto ELSE precio_total END,
+                monto_pagado_acumulado = CASE
+                    WHEN COALESCE(monto_pagado_acumulado, 0) <= 0 THEN monto
+                    ELSE monto_pagado_acumulado
+                END,
+                saldo_pendiente = CASE
+                    WHEN COALESCE(precio_total, 0) <= 0 THEN 0
+                    ELSE MAX(precio_total - COALESCE(monto_pagado_acumulado, monto), 0)
+                END,
+                numero_cuotas = CASE WHEN COALESCE(numero_cuotas, 0) <= 0 THEN 1 ELSE numero_cuotas END,
+                cuotas_pagadas = CASE WHEN COALESCE(cuotas_pagadas, 0) <= 0 THEN 1 ELSE cuotas_pagadas END,
+                estado_financiero = CASE
+                    WHEN COALESCE(precio_total, monto) - COALESCE(monto_pagado_acumulado, monto) > 0
+                    THEN 'Pago parcial' ELSE 'Pagado completo' END
+            """
+        )
 
         conn.execute(
             """
@@ -1168,6 +1199,10 @@ def guardar_venta(
     comprobante_bytes,
     comprobante_mime,
     comprobante_nombre,
+    modalidad_pago,
+    precio_total,
+    numero_cuotas,
+    proxima_fecha_pago,
 ):
     datos = COMISIONES[curso]
     comision_bs = (
@@ -1176,6 +1211,12 @@ def guardar_venta(
         else datos["monto"]
     )
     ingreso_neto = monto - comision_bs
+    monto_pagado_acumulado = float(monto)
+    saldo_pendiente = max(float(precio_total) - monto_pagado_acumulado, 0.0)
+    cuotas_pagadas = 1
+    estado_financiero = (
+        "Pagado completo" if saldo_pendiente <= 0.009 else "Pago parcial"
+    )
 
     with conectar() as conn:
         conn.execute(
@@ -1185,9 +1226,12 @@ def guardar_venta(
                 comision_original, moneda_comision, tipo_cambio,
                 comision_bs, ingreso_neto_bs, creado_por, creado_en,
                 numero_transaccion, banco, fecha_hora_pago, estado_pago,
-                comprobante, comprobante_mime, comprobante_nombre
+                comprobante, comprobante_mime, comprobante_nombre,
+                modalidad_pago, precio_total, monto_pagado_acumulado,
+                saldo_pendiente, numero_cuotas, cuotas_pagadas,
+                proxima_fecha_pago, estado_financiero
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fecha.isoformat(),
@@ -1210,6 +1254,14 @@ def guardar_venta(
                 comprobante_bytes,
                 comprobante_mime,
                 comprobante_nombre,
+                modalidad_pago,
+                float(precio_total),
+                monto_pagado_acumulado,
+                saldo_pendiente,
+                int(numero_cuotas),
+                cuotas_pagadas,
+                proxima_fecha_pago.isoformat() if proxima_fecha_pago else None,
+                estado_financiero,
             ),
         )
         conn.commit()
@@ -1696,6 +1748,14 @@ def generar_reporte_excel(df):
             "fecha_hora_pago",
             "estado_pago",
             "comprobante_nombre",
+            "modalidad_pago",
+            "precio_total",
+            "monto_pagado_acumulado",
+            "saldo_pendiente",
+            "numero_cuotas",
+            "cuotas_pagadas",
+            "proxima_fecha_pago",
+            "estado_financiero",
         ]
     ].rename(
         columns={
@@ -1715,6 +1775,14 @@ def generar_reporte_excel(df):
             "fecha_hora_pago": "Fecha_hora_pago",
             "estado_pago": "Estado_pago",
             "comprobante_nombre": "Comprobante",
+            "modalidad_pago": "Modalidad_pago",
+            "precio_total": "Precio_total_Bs",
+            "monto_pagado_acumulado": "Pagado_acumulado_Bs",
+            "saldo_pendiente": "Saldo_pendiente_Bs",
+            "numero_cuotas": "Numero_cuotas",
+            "cuotas_pagadas": "Cuotas_pagadas",
+            "proxima_fecha_pago": "Proxima_fecha_pago",
+            "estado_financiero": "Estado_financiero",
         }
     )
 
@@ -2209,6 +2277,14 @@ if seccion == "Registrar venta":
         "Registra la información de la venta y adjunta el extracto o comprobante de pago."
     )
 
+    modalidad_pago = st.radio(
+        "Modalidad de pago",
+        ["Contado", "Cuotas"],
+        horizontal=True,
+        help="Selecciona Contado para pago completo o Cuotas para registrar el primer abono.",
+        key="modalidad_pago_registro",
+    )
+
     with st.form("registro_venta", clear_on_submit=True):
         c1, c2 = st.columns(2)
 
@@ -2219,12 +2295,39 @@ if seccion == "Registrar venta":
             ]
             curso_etiqueta = st.selectbox("Curso", opciones_cursos)
             curso = codigo_desde_etiqueta(curso_etiqueta)
-            monto = st.number_input(
-                "Monto de la venta (Bs)",
-                min_value=0.01,
-                value=1000.00,
-                step=10.00,
-            )
+            if modalidad_pago == "Contado":
+                monto = st.number_input(
+                    "Monto pagado / precio total (Bs)",
+                    min_value=0.01,
+                    value=1000.00,
+                    step=10.00,
+                )
+                precio_total = float(monto)
+                numero_cuotas = 1
+                proxima_fecha_pago = None
+            else:
+                precio_total = st.number_input(
+                    "Precio total del curso (Bs)",
+                    min_value=0.01,
+                    value=3000.00,
+                    step=10.00,
+                )
+                monto = st.number_input(
+                    "Monto recibido hoy / primera cuota (Bs)",
+                    min_value=0.01,
+                    value=1000.00,
+                    step=10.00,
+                )
+                numero_cuotas = st.number_input(
+                    "Número total de cuotas",
+                    min_value=2,
+                    value=3,
+                    step=1,
+                )
+                proxima_fecha_pago = st.date_input(
+                    "Fecha de la siguiente cuota",
+                    value=date.today() + timedelta(days=30),
+                )
             cliente = st.text_input("Cliente")
 
         with c2:
@@ -2295,10 +2398,12 @@ if seccion == "Registrar venta":
         )
         neto_estimado = monto - comision_estimada
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Ingreso bruto", f"Bs {monto:,.2f}")
-        m2.metric("Comisión", f"Bs {comision_estimada:,.2f}")
-        m3.metric("Ingreso neto", f"Bs {neto_estimado:,.2f}")
+        saldo_estimado = max(float(precio_total) - float(monto), 0.0)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Recibido hoy", f"Bs {monto:,.2f}")
+        m2.metric("Precio total", f"Bs {precio_total:,.2f}")
+        m3.metric("Saldo pendiente", f"Bs {saldo_estimado:,.2f}")
+        m4.metric("Ingreso neto actual", f"Bs {neto_estimado:,.2f}")
 
         guardar = st.form_submit_button(
             "Guardar venta y comprobante",
@@ -2315,6 +2420,13 @@ if seccion == "Registrar venta":
                 st.error("Debes ingresar el nombre del cliente.")
             elif not vendedor_final:
                 st.error("Debes ingresar el nombre del vendedor.")
+            elif modalidad_pago == "Cuotas" and float(monto) >= float(precio_total):
+                st.error(
+                    "Para una venta por cuotas, el monto recibido hoy debe ser menor "
+                    "que el precio total. Si ya pagó todo, selecciona Contado."
+                )
+            elif modalidad_pago == "Cuotas" and int(numero_cuotas) < 2:
+                st.error("Una venta por cuotas debe tener al menos 2 cuotas.")
             elif not transaccion_limpia:
                 st.error("Debes ingresar el número de transacción.")
             elif numero_transaccion_existe(transaccion_limpia):
@@ -2354,11 +2466,16 @@ if seccion == "Registrar venta":
                         comprobante_bytes,
                         comprobante_mime,
                         comprobante_nombre,
+                        modalidad_pago,
+                        precio_total,
+                        numero_cuotas,
+                        proxima_fecha_pago,
                     )
                     st.success(
-                        f"Venta guardada correctamente. "
-                        f"Comisión: Bs {comision:,.2f} | "
-                        f"Ingreso neto: Bs {neto:,.2f}"
+                        f"Venta guardada correctamente como {modalidad_pago}. "
+                        f"Recibido: Bs {monto:,.2f} | "
+                        f"Saldo: Bs {max(float(precio_total) - float(monto), 0):,.2f} | "
+                        f"Ingreso neto actual: Bs {neto:,.2f}"
                     )
                     if neto < 0:
                         st.warning("La comisión supera el monto de la venta.")
@@ -2590,12 +2707,28 @@ elif seccion == "Consultar ventas":
             "fecha_hora_pago": "Fecha/hora pago",
             "estado_pago": "Estado del pago",
             "comprobante_nombre": "Comprobante",
+            "modalidad_pago": "Modalidad",
+            "precio_total": "Precio total",
+            "monto_pagado_acumulado": "Pagado acumulado",
+            "saldo_pendiente": "Saldo pendiente",
+            "numero_cuotas": "N.º cuotas",
+            "cuotas_pagadas": "Cuotas pagadas",
+            "proxima_fecha_pago": "Próxima cuota",
+            "estado_financiero": "Estado financiero",
         }
     )[
         [
             "ID",
             "Fecha",
             "Curso",
+            "Modalidad",
+            "Precio total",
+            "Pagado acumulado",
+            "Saldo pendiente",
+            "N.º cuotas",
+            "Cuotas pagadas",
+            "Próxima cuota",
+            "Estado financiero",
             "Monto",
             "Cliente",
             "Vendedor",
@@ -2616,6 +2749,9 @@ elif seccion == "Consultar ventas":
         hide_index=True,
         column_config={
             "Monto": st.column_config.NumberColumn(format="Bs %.2f"),
+            "Precio total": st.column_config.NumberColumn(format="Bs %.2f"),
+            "Pagado acumulado": st.column_config.NumberColumn(format="Bs %.2f"),
+            "Saldo pendiente": st.column_config.NumberColumn(format="Bs %.2f"),
             "Comisión Bs": st.column_config.NumberColumn(format="Bs %.2f"),
             "Ingreso neto Bs": st.column_config.NumberColumn(format="Bs %.2f"),
         },
